@@ -43,17 +43,33 @@ drivers, and `qwstpad`.
 
 | File | Purpose |
 |---|---|
-| `main.py` | Boot app. **Boots straight into the contribution graph**; press the encoder button to get to the menu (Graph, Brightness, Volume, WiFi, Apps, Update, Test). Press the button to open an item and press again to go back. **Graph:** draws `/contrib_data.json` as 53 weeks × 7 days, brighter green = more contributions; turn the wheel to show the total. While the graph is showing, it updates automatically from GitHub at boot and every 24 hours (retrying every 15 minutes on failure); WiFi connects in the background, so the display and button keep working. **Brightness:** turn to adjust, press to save to `/settings.json` (applied at boot). **WiFi:** connects with `ezwifi` and scrolls the network, IP address and signal strength. **Update:** downloads `https://github.com/<GITHUB_USERNAME>.contribs` into `/contrib_data.json` straight away and shows the graph. **Apps:** lists the `.py` files on the device; press to launch one. Apps launch via `/launch.txt` and a reset, and pressing the button while an app runs resets back to the menu. Volume and Test show "Soon!". |
-| `gol.py` | Conway's Game of Life |
-| `fast_fire.py` | Fire effect (viper-optimised) |
-| `spiral.py`, `rainbow.py`, `rainbow_wheel.py`, `balls_demo.py` | Graphics demos |
+| `main.py` | Boot app. **Boots into a carousel of widget apps** that switches to the next app every `APP_INTERVAL_S` seconds with a slide transition. Turn the wheel to jump to the next or previous app. Press the encoder button for the menu: **Apps** (pick an app to jump to it), **Brightness** (turn to adjust, press to save to `/settings.json`), **WiFi** (shows network, IP and signal), **Update** (refreshes all data now), **< Back**. Volume and Test show "Soon!". The menu returns to the carousel after 30 s of no input. |
+| `widgets.py` | The carousel apps. Each draws a blurred glow pass (drifting ambient blobs, haloed text) under a crisp pass. **Graph:** 53 weeks of contributions (brighter green = more) that sweep in, with a band of light passing over and today pulsing. **Clock:** large digits that roll when they change, a blinking colon, a comet marking the seconds and slowly drifting colour; shows `--:--` until NTP time syncs. **Stars / Followers / X / YouTube:** pixel icon that bounces in and a number that counts up, with sparkles; numbers are abbreviated (`20.3K`) when they don't fit or are approximate. |
+| `datasource.py` | Background data fetching. Connects to WiFi without blocking and streams each request a chunk per frame so animations keep running. Values are cached in `/cache.json` (contributions in `/contrib_data.json`). See [Data sources](#data-sources). |
+| `config.py` | Non-secret settings: app list and order, rotation interval, timezone, 12/24 hour clock, repo for stars, X handle, YouTube handle. |
+| `backup/` | The original demo apps (`gol.py`, `fast_fire.py`, `spiral.py`, `rainbow.py`, `rainbow_wheel.py`, `balls_demo.py`). Not part of the menu any more, but can still be run with `mpremote` (see below). |
 | `contrib_data.json` | Sample contribution graph (schema `v2`: `weeks[53].contribution_days[7]` with `count`/`level`, `colors_full`, `months`, `total_contributions`). Same format as `https://github.com/<user>.contribs`; the **Update** menu item replaces it with your own data. |
 | `user_data.json` | Sample GitHub `/users/<login>` API response (@Gadgetoid) |
 | `rom/fonts/*.ppf` | Copy of the ROMFS fonts, available on the device as `rom_font.<name>` |
 | `secrets.example.py` | Template for `secrets.py` (see below) |
 
-> The graph updates automatically from `https://github.com/<GITHUB_USERNAME>.contribs`
-> at boot and daily, and the **Update** menu item forces an update straight away.
+## Data sources
+
+| App | Source | Refresh |
+|---|---|---|
+| Graph | `https://github.com/<GITHUB_USERNAME>.contribs` | 24 h |
+| Clock | NTP (`ntptime`), shown at `TIMEZONE_OFFSET_HOURS` from UTC | 6 h |
+| Stars | GitHub REST API `repos/<STARS_REPO>` | 1 h |
+| Followers | GitHub REST API `users/<GITHUB_USERNAME>` | 1 h |
+| X | [FxTwitter](https://github.com/FixTweet/FxTwitter) public API `api.fxtwitter.com/<X_HANDLE>` (X has no free official API) | 1 h |
+| YouTube | YouTube Data API if `YOUTUBE_API_KEY` is set; otherwise the public `m.youtube.com/<YOUTUBE_HANDLE>` page (~1 MB streamed over ~10 s, abbreviated count like `711K`) | 6 h |
+
+All sources fetch at boot. Failed fetches retry after 15 minutes, and the last good value
+stays on screen in the meantime. Caveats:
+
+- The timezone is a fixed offset, so change `TIMEZONE_OFFSET_HOURS` for daylight saving.
+- Unauthenticated GitHub API calls are limited to 60/hour per IP; set `GITHUB_TOKEN` if you share the IP with other tools.
+- FxTwitter is a third-party service and occasionally fails; the cached value is shown until it recovers.
 
 ## Setup
 
@@ -72,9 +88,12 @@ Create `secrets.py` from the template and copy it to the device:
 
 ```sh
 cp device/secrets.example.py device/secrets.py   # git-ignored
-# edit WIFI_SSID, WIFI_PASSWORD, GITHUB_USERNAME
+# edit WIFI_SSID, WIFI_PASSWORD, GITHUB_USERNAME (and optional tokens)
 mpremote fs cp device/secrets.py :secrets.py
 ```
+
+Then edit `device/config.py` for your timezone, clock format, apps, rotation interval,
+repo, X handle and YouTube channel, and copy it over with `mpremote fs cp device/config.py :`.
 
 `ezwifi` reads `WIFI_SSID`/`WIFI_PASSWORD` from `secrets.py`:
 
@@ -86,8 +105,8 @@ ezwifi.connect()
 ### 3. Deploy apps
 
 ```sh
-mpremote fs cp device/gol.py :gol.py     # one file
-cd device && mpremote fs cp *.py *.json : # everything
+mpremote fs cp device/widgets.py :       # one file
+cd device && mpremote fs cp *.py :        # everything
 mpremote reset                            # reboot into main.py
 ```
 
@@ -97,7 +116,16 @@ Apps rely on globals (`screen`, `display`, `color`, `rom_font`, `vec2`, `shape`,
 `image`, `mat3`...) that are set up when `contribution_widget` is imported:
 
 ```sh
-mpremote exec "import contribution_widget" run device/gol.py
+mpremote exec "import contribution_widget" run device/backup/gol.py
+```
+
+### 5. Preview frames on your computer
+
+`tools/snap.py` runs drawing code on the device and saves the framebuffer as a PNG of
+round LEDs, which is handy for checking visuals:
+
+```sh
+python3 tools/snap.py /tmp/frame.png "screen.pen = color.rgb(0,255,0); screen.text('Hi', vec2(0,0))"
 ```
 
 ## Drawing API, quick reference

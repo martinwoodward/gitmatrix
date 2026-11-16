@@ -1,5 +1,4 @@
 import gc
-import os
 import json
 import time
 import machine
@@ -8,10 +7,12 @@ import contribution_widget  # noqa: F401
 from encoder import Encoder
 import random
 
+import config
+from datasource import Data
+import widgets
+
 SETTINGS_FILE = "/settings.json"
-LAUNCH_FILE = "/launch.txt"
 BUTTON_PIN = 20  # board.SWITCH, active low
-APP_EXCLUDE = ("main.py", "boot.py", "secrets.py", "secrets.example.py")
 
 
 def load_settings():
@@ -32,73 +33,31 @@ display.set_brightness(settings.get("brightness", 1.0))
 
 button = machine.Pin(BUTTON_PIN, machine.Pin.IN, machine.Pin.PULL_UP)
 
-
-def launch_pending_app():
-    # Apps are started from a fresh boot so they get clean PIO/RAM. Pressing the
-    # button while an app runs resets back to this menu.
-    try:
-        with open(LAUNCH_FILE) as f:
-            app = f.read().strip()
-        os.remove(LAUNCH_FILE)
-    except OSError:
-        return
-
-    def arm(_):
-        button.irq(trigger=machine.Pin.IRQ_FALLING, handler=lambda p: machine.reset())
-
-    # Delay arming so the press that launched the app doesn't immediately exit it
-    global _arm_timer
-    _arm_timer = machine.Timer(mode=machine.Timer.ONE_SHOT, period=1000, callback=arm)
-    print("Launching", app)
-    try:
-        with open(app) as f:
-            exec(f.read(), {"__name__": "__main__"})
-    except Exception as e:  # noqa: BLE001
-        print("App error:", e)
-    machine.reset()
-
-
-launch_pending_app()
-
-
 SNAP_THRESHOLD = 1  # Number of turns required to snap to the next item, for > 1 turns the timeout below applies
 SNAP_TIMEOUT_MS = 800
-SNAP_SPEED = 1.5 # Multiplier for how snappily the next item should slide in
-PEEK_AMOUNT = 0.45 # How far the next item shoud peek in, this value is eased so it's unintuitive
+SNAP_SPEED = 1.5  # Multiplier for how snappily the next item should slide in
+PEEK_AMOUNT = 0.45  # How far the next item shoud peek in, this value is eased so it's unintuitive
 FONT = rom_font.sins
 GLOW = True  # glow around words
 CENTER_TEXT = True
+MENU_IDLE_MS = 30 * 1000  # Return to the carousel after this long without input
+TRANSITION_MS = 700
 
 width = 53
 height = 7
 
-"""
-A demonstration of a rotary encoder being used to control a value.
-"""
-
-# Free up hardware resources ahead of creating a new Encoder
 gc.collect()
-
-# Create an encoder on the 3 ADC pins, using PIO 0 and State Machine 0
-PIN_A = 22#Pin.board.ENC_A    # The A channel pin
-PIN_B = 21#Pin.board.ENC_B    # The B channel pin
-enc = Encoder(1, 0, (PIN_A, PIN_B))
-
-value = 0
-
-# Print out the initial value
-print("Value =", value)
+enc = Encoder(1, 0, (22, 21))
 
 modes = [
-    "Graph",
-    "Brightn...",
-    "Volume",
-    "WiFi",
     "Apps",
+    "Brightn...",
+    "WiFi",
     "Update",
-    "Test"
+    "Volume",
+    "Test",
+    "< Back",
 ]
-
 
 def mode_scroll(text, font_face=None, fg=None, target=None):
     font_face = font_face or rom_font.sins
@@ -135,6 +94,7 @@ def mode_scroll(text, font_face=None, fg=None, target=None):
 
 
 canvas = image(53 + 20, 7 * 3)
+canvas2 = image(53 + 20, 7 * 3)
 
 num_modes = len(modes)
 
@@ -184,7 +144,7 @@ class Ball:
 
     def draw(self, target, pen):
         target.pen = pen
-        circle.transform = mat3().translate(ball.x, ball.y).scale(ball.r)
+        circle.transform = mat3().translate(self.x, self.y).scale(self.r)
         target.shape(circle)
 
 
@@ -286,147 +246,6 @@ def wifi_screen():
         wait_for_press(f"Can't join {ssid}", RED)
 
 
-DATA_FILE = "/contrib_data.json"
-
-
-def update_contribs():
-    try:
-        from secrets import GITHUB_USERNAME
-    except ImportError:
-        wait_for_press("Set GITHUB_USERNAME in secrets.py", RED)
-        return False
-    if not wifi_connect():
-        wait_for_press("No WiFi", RED)
-        return False
-    message("Fetching", color.oklch(200, 150, 240))
-    try:
-        fetch_contribs(GITHUB_USERNAME)
-    except Exception as e:  # noqa: BLE001
-        print("Update failed:", e)
-        wait_for_press(f"Failed: {e}", RED)
-        return False
-    return True
-
-
-def fetch_contribs(username):
-    import requests
-    gc.collect()
-    r = requests.get(f"https://github.com/{username}.contribs",
-                     headers={"User-Agent": "contribution-widget"})
-    body = r.content
-    status = r.status_code
-    r.close()
-    if status != 200:
-        raise ValueError(f"HTTP {status}")
-    if "weeks" not in json.loads(body):
-        raise ValueError("bad data")
-    with open(DATA_FILE, "wb") as f:
-        f.write(body)
-    auto_update.next_at = time.ticks_add(time.ticks_ms(), UPDATE_INTERVAL_MS)
-
-
-UPDATE_INTERVAL_MS = 24 * 60 * 60 * 1000
-RETRY_INTERVAL_MS = 15 * 60 * 1000
-WIFI_TIMEOUT_MS = 30 * 1000
-
-
-class AutoUpdate:
-    # Non-blocking WiFi connect so the graph keeps drawing (and the button keeps
-    # working) while we wait; only the HTTPS fetch itself blocks (~1s).
-    def __init__(self):
-        self.next_at = time.ticks_ms()
-        self.connecting_since = None
-
-    def _retry_later(self, now):
-        self.connecting_since = None
-        self.next_at = time.ticks_add(now, RETRY_INTERVAL_MS)
-
-    def poll(self):
-        now = time.ticks_ms()
-        if time.ticks_diff(now, self.next_at) < 0:
-            return False
-        import network
-        wlan = network.WLAN(network.STA_IF)
-        try:
-            import secrets
-            ssid, password, username = secrets.WIFI_SSID, secrets.WIFI_PASSWORD, secrets.GITHUB_USERNAME
-        except (ImportError, AttributeError):
-            self._retry_later(now)
-            return False
-        if not wlan.isconnected():
-            if self.connecting_since is None:
-                wlan.active(True)
-                wlan.connect(ssid, password)
-                self.connecting_since = now
-            elif time.ticks_diff(now, self.connecting_since) > WIFI_TIMEOUT_MS:
-                print("Auto update: WiFi timed out")
-                self._retry_later(now)
-            return False
-        self.connecting_since = None
-        try:
-            fetch_contribs(username)
-            print("Auto update: OK")
-            return True
-        except Exception as e:  # noqa: BLE001
-            print("Auto update failed:", e)
-            self._retry_later(now)
-            return False
-
-
-auto_update = AutoUpdate()
-
-
-def update_screen():
-    if update_contribs():
-        graph_screen()
-
-
-# Brighter = more contributions reads better on LEDs than GitHub's dark-is-more web palette
-LEVEL_PENS = [
-    color.rgb(0, 6, 2),
-    color.rgb(0, 45, 14),
-    color.rgb(0, 100, 30),
-    color.rgb(0, 170, 50),
-    color.rgb(70, 255, 110),
-]
-
-
-def load_contribs():
-    try:
-        with open(DATA_FILE) as f:
-            return json.load(f)
-    except (OSError, ValueError):
-        return None
-
-
-def graph_screen():
-    data = load_contribs()
-    opened = time.ticks_ms()
-    show_total_until = 0
-    enc.delta()
-    while not btn.pressed():
-        now = time.ticks_ms()
-        if auto_update.poll():
-            data = load_contribs()
-            opened = now
-        if enc.delta():
-            show_total_until = time.ticks_add(now, 2500)
-        blank()
-        if data is None:
-            draw_marquee("No data yet - check WiFi in secrets.py", opened, RED)
-        elif time.ticks_diff(show_total_until, now) > 0:
-            draw_text(f"{data.get('total_contributions', 0)} contribs", pen=GREEN)
-        else:
-            weeks = data["weeks"][-width:]
-            # Sweep the columns in from the left when the graph (re)loads
-            cols = min(len(weeks), time.ticks_diff(now, opened) // 10 + 1)
-            for x in range(cols):
-                for day in weeks[x]["contribution_days"]:
-                    screen.pen = LEVEL_PENS[min(4, day["level"])]
-                    screen.rectangle(x, day["weekday"], 1, 1)
-        display.update()
-
-
 def brightness_screen():
     level = display.get_brightness()
     enc.delta()
@@ -444,30 +263,41 @@ def brightness_screen():
     save_settings(settings)
 
 
+
+data = Data(config.APPS)
+apps = widgets.build(config.APPS, data)
+app_index = 0
+
+
+def update_screen():
+    data.refresh_all()
+    message("Updating", color.oklch(200, 150, 240))
+    time.sleep_ms(700)
+    return True  # Back to the carousel to watch the values arrive
+
+
 def apps_screen():
-    apps = sorted(f for f in os.listdir("/") if f.endswith(".py") and f not in APP_EXCLUDE)
-    apps.append("< Back")
-    idx = 0
+    global app_index
+    names = [n.capitalize() if n != "x" else "X" for n, _ in apps] + ["< Back"]
+    idx = app_index
     shown = time.ticks_ms()
     enc.delta()
     while True:
+        data.poll()
         d = enc.delta()
         if d:
-            idx = (idx + (1 if d > 0 else -1)) % len(apps)
+            idx = (idx + (1 if d > 0 else -1)) % len(names)
             shown = time.ticks_ms()
         if btn.pressed():
-            if apps[idx] == "< Back":
-                return
-            with open(LAUNCH_FILE, "w") as f:
-                f.write(apps[idx])
-            machine.reset()
-
+            if idx == len(apps):
+                return False
+            app_index = idx
+            return True
         blank()
-        name = apps[idx][:-3] if apps[idx].endswith(".py") else apps[idx]
-        draw_marquee(name, shown, color.oklch(220, 150, idx * 40))
+        draw_marquee(names[idx], shown, color.oklch(220, 150, idx * 40))
         # Position indicator along the bottom row
         screen.pen = color.rgb(60, 60, 60)
-        screen.rectangle(int(idx * width / len(apps)), height - 1, max(1, width // len(apps)), 1)
+        screen.rectangle(int(idx * width / len(names)), height - 1, max(1, width // len(names)), 1)
         display.update()
 
 
@@ -479,101 +309,161 @@ def coming_soon():
 
 
 def open_mode(name):
-    if name == "Graph":
-        graph_screen()
-    elif name.startswith("Brightn"):
+    # Returns True to leave the menu and go back to the carousel
+    if name == "Apps":
+        return apps_screen()
+    if name.startswith("Brightn"):
         brightness_screen()
-    elif name == "Apps":
-        apps_screen()
     elif name == "WiFi":
         wifi_screen()
     elif name == "Update":
-        update_screen()
+        return update_screen()
+    elif name == "< Back":
+        return True
     else:
         coming_soon()
+    return False
+
+
+def slide(old, new, p, direction):
+    # Compose two app canvases sliding horizontally; p is 0..1
+    s = int(round(easing.easeInOutCubic(p) * width))
+    ox, oy = widgets.OX, widgets.OY
+    if direction < 0:
+        old, new = new, old
+        s = width - s
+    if s < width:
+        screen.blit(old, rect(ox + s, oy, width - s, height), rect(0, 0, width - s, height))
+    if s > 0:
+        screen.blit(new, rect(ox, oy, s, height), rect(width - s, 0, s, height))
+
+
+def carousel():
+    global app_index
+    name, app = apps[app_index]
+    app.enter()
+    entered = time.ticks_ms()
+    prev = None  # (app, entered) while a transition is running
+    direction = 1
     enc.delta()
+    while True:
+        now = time.ticks_ms()
+        if prev is None:
+            # Skip network work mid-transition so the TLS handshake can't stutter it
+            data.poll()
+        if btn.pressed():
+            return
+        d = enc.delta()
+        step = 0
+        if d:
+            step = 1 if d > 0 else -1
+        elif prev is None and len(apps) > 1 and time.ticks_diff(now, entered) > config.APP_INTERVAL_S * 1000:
+            step = 1
+        if step and prev is None:
+            prev = (app, entered, now)
+            direction = step
+            app_index = (app_index + step) % len(apps)
+            name, app = apps[app_index]
+            app.enter()
+            entered = now
+            print("app:", name)
+
+        app.render(canvas, time.ticks_diff(now, entered))
+        if prev is not None:
+            p = time.ticks_diff(now, prev[2]) / TRANSITION_MS
+            if p >= 1:
+                prev = None
+            else:
+                prev[0].render(canvas2, time.ticks_diff(now, prev[1]))
+                slide(canvas2, canvas, p, direction)
+        if prev is None:
+            screen.blit(canvas, vec2(-widgets.OX, -widgets.OY))
+        display.update()
 
 
-current_mode = 0
-next_mode = 1
+def menu():
+    global value, last_value, offset, app_offset, time_changed, current_app, direction
+    idle_since = time.ticks_ms()
+    enc.delta()
+    while True:
+        data.poll()
+        if current_app is not None and btn.pressed():
+            if open_mode(modes[current_app][0]):
+                return
+            enc.delta()
+            idle_since = time.ticks_ms()
+            continue
 
-last_value = 0
+        if time.ticks_diff(time.ticks_ms(), idle_since) > MENU_IDLE_MS:
+            return
 
-offset = 0
+        canvas.pen = color.rgb(0, 0, 0)
+        canvas.clear()
 
-app_offset = -1  # Snaps to 0 on the first frame so the menu opens on Graph
+        delta = enc.delta()
+        last_value = value
+        if delta != 0:
+            value += 1
+            direction = 1 if delta > 0 else -1
+            idle_since = time.ticks_ms()
 
-time_changed = None
-current_app = None
+        # Creep the next item in from the right and snap across at a threshold
+        if value >= SNAP_THRESHOLD:
+            offset += 0.01 * SNAP_SPEED
+        elif value > 0:
+            offset = value * PEEK_AMOUNT
 
-direction = 1
+        # Snap to the selected item
+        if offset > 1.0 or current_app is None:
+            offset = 0
+            value = 0
+            app_offset += direction
+            app_offset %= num_modes
 
-# Boot straight into the contribution graph; pressing the button drops into the menu
-graph_screen()
-enc.delta()
+            # Need to invert the offset to get the currently selected item
+            current_app = (num_modes - app_offset) % num_modes
 
-# Loop forever
-while True:
-    if current_app is not None and btn.pressed():
-        open_mode(modes[current_app][0])
-        continue
+        if last_value != value:
+            time_changed = time.ticks_ms()
 
-    canvas.pen = color.rgb(0, 0, 0)
-    canvas.clear()
+        if time_changed:
+            if time.ticks_diff(time.ticks_ms(), time_changed) > SNAP_TIMEOUT_MS and value < SNAP_THRESHOLD:
+                value -= 0.01 * SNAP_SPEED
+                last_value = value
+                if value < 0.01:
+                    value = 0
+                    time_changed = None
 
-    delta = enc.delta()
-    last_value = value
-    if delta != 0:
-        value += 1
-        direction = 1 if delta > 0 else -1
+        if GLOW:
+            for ball in balls:
+                ball.update(canvas)
+                ball.draw(canvas, modes[current_app][3])
 
-    #value = math.sin(time.ticks_ms() / 1000) + 1 / 2.0
+            for i in range(num_modes):
+                prog = easing.easeInQuart(offset % 1) * direction + i + app_offset
+                modes[i][1](prog)
 
-    # Creep the next app in from the right and snap across at a threshold
-    if value >= SNAP_THRESHOLD:
-        offset += 0.01 * SNAP_SPEED
-    elif value > 0:
-        offset = value * PEEK_AMOUNT
-
-    # Snap to the selected app
-    if offset > 1.0 or current_app is None:
-        offset = 0
-        value = 0
-        app_offset += direction
-        app_offset %= num_modes
-
-        # Need to invert the offset to get the currently selected app
-        current_app = (num_modes - app_offset) % num_modes
-
-        print(modes[current_app][0])
-
-
-    if last_value != value:
-        time_changed = time.ticks_ms()
-
-    if time_changed:
-        if time.ticks_diff(time.ticks_ms(), time_changed) > SNAP_TIMEOUT_MS and value < SNAP_THRESHOLD:
-            value -= 0.01 * SNAP_SPEED
-            last_value = value
-            if value < 0.01:
-                value = 0
-                time_changed = None
-
-    if GLOW:
-        for ball in balls:
-            ball.update(canvas)
-            ball.draw(canvas, modes[current_app][3])
+            canvas.blur(2)
 
         for i in range(num_modes):
             prog = easing.easeInQuart(offset % 1) * direction + i + app_offset
-            modes[i][1](prog)
+            modes[i][2](prog)
 
-        canvas.blur(2)
+        screen.blit(canvas, vec2(-10, -7))
 
-    for i in range(num_modes):
-        prog = easing.easeInQuart(offset % 1) * direction + i + app_offset
-        modes[i][2](prog)
+        display.update()
 
-    screen.blit(canvas, vec2(-10, -7))
 
-    display.update()
+value = 0
+last_value = 0
+offset = 0
+app_offset = 1  # Snaps to 0 on the first frame so the menu opens on the first item
+time_changed = None
+current_app = None
+direction = -1
+
+while True:
+    carousel()
+    # Reopen the menu on its first item each time
+    app_offset, direction, current_app, value, offset, time_changed = 1, -1, None, 0, 0, None
+    menu()
