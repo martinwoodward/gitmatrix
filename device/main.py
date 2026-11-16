@@ -90,6 +90,7 @@ value = 0
 print("Value =", value)
 
 modes = [
+    "Graph",
     "Brightn...",
     "Volume",
     "WiFi",
@@ -225,6 +226,144 @@ def blank():
     screen.clear()
 
 
+def draw_marquee(text, since, pen=None):
+    # Centre text that fits; otherwise scroll it after a short pause
+    screen.font = FONT
+    tw, _ = screen.measure_text(text)
+    if tw <= width:
+        draw_text(text, pen=pen)
+        return
+    gap = 15
+    elapsed = time.ticks_diff(time.ticks_ms(), since) - 700
+    x = 1 - (max(0, elapsed) // 40) % (tw + gap)
+    draw_text(text, x, pen)
+    draw_text(text, x + tw + gap, pen)
+
+
+def message(text, pen=None):
+    blank()
+    draw_text(text, pen=pen)
+    display.update()
+
+
+def wait_for_press(text, pen=None):
+    since = time.ticks_ms()
+    while not btn.pressed():
+        blank()
+        draw_marquee(text, since, pen)
+        display.update()
+
+
+RED = color.oklch(180, 200, 25)
+GREEN = color.oklch(200, 180, 140)
+
+
+def wifi_connect():
+    import network
+    wlan = network.WLAN(network.STA_IF)
+    if wlan.isconnected():
+        return wlan
+    try:
+        import secrets  # noqa: F401
+    except ImportError:
+        return None
+    import ezwifi
+    message("WiFi...", color.oklch(200, 150, 240))
+    return wlan if ezwifi.connect() else None
+
+
+def wifi_screen():
+    try:
+        import secrets
+        ssid = secrets.WIFI_SSID
+    except (ImportError, AttributeError):
+        wait_for_press("No secrets.py - see README", RED)
+        return
+    wlan = wifi_connect()
+    if wlan:
+        wait_for_press(f"{ssid} {wlan.ifconfig()[0]} {wlan.status('rssi')}dBm", GREEN)
+    else:
+        wait_for_press(f"Can't join {ssid}", RED)
+
+
+DATA_FILE = "/contrib_data.json"
+
+
+def update_contribs():
+    try:
+        from secrets import GITHUB_USERNAME
+    except ImportError:
+        wait_for_press("Set GITHUB_USERNAME in secrets.py", RED)
+        return False
+    if not wifi_connect():
+        wait_for_press("No WiFi", RED)
+        return False
+    message("Fetching", color.oklch(200, 150, 240))
+    import requests
+    gc.collect()
+    try:
+        r = requests.get(f"https://github.com/{GITHUB_USERNAME}.contribs",
+                         headers={"User-Agent": "contribution-widget"})
+        body = r.content
+        status = r.status_code
+        r.close()
+        if status != 200:
+            raise ValueError(f"HTTP {status}")
+        if "weeks" not in json.loads(body):
+            raise ValueError("bad data")
+    except Exception as e:  # noqa: BLE001
+        print("Update failed:", e)
+        wait_for_press(f"Failed: {e}", RED)
+        return False
+    with open(DATA_FILE, "wb") as f:
+        f.write(body)
+    return True
+
+
+def update_screen():
+    if update_contribs():
+        graph_screen()
+
+
+# Brighter = more contributions reads better on LEDs than GitHub's dark-is-more web palette
+LEVEL_PENS = [
+    color.rgb(0, 6, 2),
+    color.rgb(0, 45, 14),
+    color.rgb(0, 100, 30),
+    color.rgb(0, 170, 50),
+    color.rgb(70, 255, 110),
+]
+
+
+def graph_screen():
+    try:
+        with open(DATA_FILE) as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        wait_for_press("No data - use Update", RED)
+        return
+    weeks = data["weeks"][-width:]
+    total = data.get("total_contributions", 0)
+    opened = time.ticks_ms()
+    show_total_until = 0
+    enc.delta()
+    while not btn.pressed():
+        now = time.ticks_ms()
+        if enc.delta():
+            show_total_until = time.ticks_add(now, 2500)
+        blank()
+        if time.ticks_diff(show_total_until, now) > 0:
+            draw_text(f"{total} contribs", pen=GREEN)
+        else:
+            # Sweep the columns in from the left when the graph first opens
+            cols = min(len(weeks), time.ticks_diff(now, opened) // 10 + 1)
+            for x in range(cols):
+                for day in weeks[x]["contribution_days"]:
+                    screen.pen = LEVEL_PENS[min(4, day["level"])]
+                    screen.rectangle(x, day["weekday"], 1, 1)
+        display.update()
+
+
 def brightness_screen():
     level = display.get_brightness()
     enc.delta()
@@ -262,18 +401,7 @@ def apps_screen():
 
         blank()
         name = apps[idx][:-3] if apps[idx].endswith(".py") else apps[idx]
-        pen = color.oklch(220, 150, idx * 40)
-        screen.font = FONT
-        tw, _ = screen.measure_text(name)
-        if tw <= width:
-            draw_text(name, pen=pen)
-        else:
-            # Marquee long names after a short pause
-            gap = 15
-            elapsed = time.ticks_diff(time.ticks_ms(), shown) - 700
-            x = 1 - (max(0, elapsed) // 40) % (tw + gap)
-            draw_text(name, x, pen)
-            draw_text(name, x + tw + gap, pen)
+        draw_marquee(name, shown, color.oklch(220, 150, idx * 40))
         # Position indicator along the bottom row
         screen.pen = color.rgb(60, 60, 60)
         screen.rectangle(int(idx * width / len(apps)), height - 1, max(1, width // len(apps)), 1)
@@ -288,10 +416,16 @@ def coming_soon():
 
 
 def open_mode(name):
-    if name.startswith("Brightn"):
+    if name == "Graph":
+        graph_screen()
+    elif name.startswith("Brightn"):
         brightness_screen()
     elif name == "Apps":
         apps_screen()
+    elif name == "WiFi":
+        wifi_screen()
+    elif name == "Update":
+        update_screen()
     else:
         coming_soon()
     enc.delta()
@@ -304,7 +438,7 @@ last_value = 0
 
 offset = 0
 
-app_offset = 0
+app_offset = -1  # Snaps to 0 on the first frame so the menu opens on Graph
 
 time_changed = None
 current_app = None

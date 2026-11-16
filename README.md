@@ -43,17 +43,18 @@ drivers, and `qwstpad`.
 
 | File | Purpose |
 |---|---|
-| `main.py` | Boot app. A menu you scroll with the encoder (Brightness, Volume, WiFi, Apps, Update, Test). Press the encoder button to open an item. **Brightness:** turn to adjust, press to save to `/settings.json` (applied at boot). **Apps:** lists the `.py` files on the device; press to launch one. Apps launch via `/launch.txt` and a reset, and pressing the button while an app runs resets back to the menu. Other items show "Soon!". |
+| `main.py` | Boot app. A menu you scroll with the encoder (Graph, Brightness, Volume, WiFi, Apps, Update, Test); it opens on Graph. Press the encoder button to open an item and press again to go back. **Graph:** draws `/contrib_data.json` as 53 weeks × 7 days, brighter green = more contributions; turn the wheel to show the total. **Brightness:** turn to adjust, press to save to `/settings.json` (applied at boot). **WiFi:** connects with `ezwifi` and scrolls the network, IP address and signal strength. **Update:** downloads `https://github.com/<GITHUB_USERNAME>.contribs` into `/contrib_data.json` and shows the graph. **Apps:** lists the `.py` files on the device; press to launch one. Apps launch via `/launch.txt` and a reset, and pressing the button while an app runs resets back to the menu. Volume and Test show "Soon!". |
 | `gol.py` | Conway's Game of Life |
 | `fast_fire.py` | Fire effect (viper-optimised) |
 | `spiral.py`, `rainbow.py`, `rainbow_wheel.py`, `balls_demo.py` | Graphics demos |
-| `contrib_data.json` | Sample contribution graph (schema `v2`: `weeks[53].contribution_days[7]` with `count`/`level`, `colors_full`, `months`, `total_contributions`). Currently @Gadgetoid's data from 2026-03-13. |
+| `contrib_data.json` | Sample contribution graph (schema `v2`: `weeks[53].contribution_days[7]` with `count`/`level`, `colors_full`, `months`, `total_contributions`). Same format as `https://github.com/<user>.contribs`; the **Update** menu item replaces it with your own data. |
 | `user_data.json` | Sample GitHub `/users/<login>` API response (@Gadgetoid) |
 | `rom/fonts/*.ppf` | Copy of the ROMFS fonts, available on the device as `rom_font.<name>` |
 | `secrets.example.py` | Template for `secrets.py` (see below) |
 
-> Nothing on the device currently fetches contribution data over WiFi. The JSON files
-> are static samples, so a "live graph" app still needs to be written.
+> The **Update** menu item fetches your contribution data from
+> `https://github.com/<GITHUB_USERNAME>.contribs` over WiFi. Data isn't refreshed
+> automatically yet.
 
 ## Setup
 
