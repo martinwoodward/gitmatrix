@@ -43,7 +43,7 @@ drivers, and `qwstpad`.
 
 | File | Purpose |
 |---|---|
-| `main.py` | Boot app. A menu you scroll with the encoder (Graph, Brightness, Volume, WiFi, Apps, Update, Test); it opens on Graph. Press the encoder button to open an item and press again to go back. **Graph:** draws `/contrib_data.json` as 53 weeks × 7 days, brighter green = more contributions; turn the wheel to show the total. **Brightness:** turn to adjust, press to save to `/settings.json` (applied at boot). **WiFi:** connects with `ezwifi` and scrolls the network, IP address and signal strength. **Update:** downloads `https://github.com/<GITHUB_USERNAME>.contribs` into `/contrib_data.json` and shows the graph. **Apps:** lists the `.py` files on the device; press to launch one. Apps launch via `/launch.txt` and a reset, and pressing the button while an app runs resets back to the menu. Volume and Test show "Soon!". |
+| `main.py` | Boot app. **Boots straight into the contribution graph**; press the encoder button to get to the menu (Graph, Brightness, Volume, WiFi, Apps, Update, Test). Press the button to open an item and press again to go back. **Graph:** draws `/contrib_data.json` as 53 weeks × 7 days, brighter green = more contributions; turn the wheel to show the total. While the graph is showing, it updates automatically from GitHub at boot and every 24 hours (retrying every 15 minutes on failure); WiFi connects in the background, so the display and button keep working. **Brightness:** turn to adjust, press to save to `/settings.json` (applied at boot). **WiFi:** connects with `ezwifi` and scrolls the network, IP address and signal strength. **Update:** downloads `https://github.com/<GITHUB_USERNAME>.contribs` into `/contrib_data.json` straight away and shows the graph. **Apps:** lists the `.py` files on the device; press to launch one. Apps launch via `/launch.txt` and a reset, and pressing the button while an app runs resets back to the menu. Volume and Test show "Soon!". |
 | `gol.py` | Conway's Game of Life |
 | `fast_fire.py` | Fire effect (viper-optimised) |
 | `spiral.py`, `rainbow.py`, `rainbow_wheel.py`, `balls_demo.py` | Graphics demos |
@@ -52,9 +52,8 @@ drivers, and `qwstpad`.
 | `rom/fonts/*.ppf` | Copy of the ROMFS fonts, available on the device as `rom_font.<name>` |
 | `secrets.example.py` | Template for `secrets.py` (see below) |
 
-> The **Update** menu item fetches your contribution data from
-> `https://github.com/<GITHUB_USERNAME>.contribs` over WiFi. Data isn't refreshed
-> automatically yet.
+> The graph updates automatically from `https://github.com/<GITHUB_USERNAME>.contribs`
+> at boot and daily, and the **Update** menu item forces an update straight away.
 
 ## Setup
 

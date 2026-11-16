@@ -299,25 +299,81 @@ def update_contribs():
         wait_for_press("No WiFi", RED)
         return False
     message("Fetching", color.oklch(200, 150, 240))
-    import requests
-    gc.collect()
     try:
-        r = requests.get(f"https://github.com/{GITHUB_USERNAME}.contribs",
-                         headers={"User-Agent": "contribution-widget"})
-        body = r.content
-        status = r.status_code
-        r.close()
-        if status != 200:
-            raise ValueError(f"HTTP {status}")
-        if "weeks" not in json.loads(body):
-            raise ValueError("bad data")
+        fetch_contribs(GITHUB_USERNAME)
     except Exception as e:  # noqa: BLE001
         print("Update failed:", e)
         wait_for_press(f"Failed: {e}", RED)
         return False
+    return True
+
+
+def fetch_contribs(username):
+    import requests
+    gc.collect()
+    r = requests.get(f"https://github.com/{username}.contribs",
+                     headers={"User-Agent": "contribution-widget"})
+    body = r.content
+    status = r.status_code
+    r.close()
+    if status != 200:
+        raise ValueError(f"HTTP {status}")
+    if "weeks" not in json.loads(body):
+        raise ValueError("bad data")
     with open(DATA_FILE, "wb") as f:
         f.write(body)
-    return True
+    auto_update.next_at = time.ticks_add(time.ticks_ms(), UPDATE_INTERVAL_MS)
+
+
+UPDATE_INTERVAL_MS = 24 * 60 * 60 * 1000
+RETRY_INTERVAL_MS = 15 * 60 * 1000
+WIFI_TIMEOUT_MS = 30 * 1000
+
+
+class AutoUpdate:
+    # Non-blocking WiFi connect so the graph keeps drawing (and the button keeps
+    # working) while we wait; only the HTTPS fetch itself blocks (~1s).
+    def __init__(self):
+        self.next_at = time.ticks_ms()
+        self.connecting_since = None
+
+    def _retry_later(self, now):
+        self.connecting_since = None
+        self.next_at = time.ticks_add(now, RETRY_INTERVAL_MS)
+
+    def poll(self):
+        now = time.ticks_ms()
+        if time.ticks_diff(now, self.next_at) < 0:
+            return False
+        import network
+        wlan = network.WLAN(network.STA_IF)
+        try:
+            import secrets
+            ssid, password, username = secrets.WIFI_SSID, secrets.WIFI_PASSWORD, secrets.GITHUB_USERNAME
+        except (ImportError, AttributeError):
+            self._retry_later(now)
+            return False
+        if not wlan.isconnected():
+            if self.connecting_since is None:
+                wlan.active(True)
+                wlan.connect(ssid, password)
+                self.connecting_since = now
+            elif time.ticks_diff(now, self.connecting_since) > WIFI_TIMEOUT_MS:
+                print("Auto update: WiFi timed out")
+                self._retry_later(now)
+            return False
+        self.connecting_since = None
+        try:
+            fetch_contribs(username)
+            print("Auto update: OK")
+            return True
+        except Exception as e:  # noqa: BLE001
+            print("Auto update failed:", e)
+            self._retry_later(now)
+            return False
+
+
+auto_update = AutoUpdate()
 
 
 def update_screen():
@@ -335,27 +391,34 @@ LEVEL_PENS = [
 ]
 
 
-def graph_screen():
+def load_contribs():
     try:
         with open(DATA_FILE) as f:
-            data = json.load(f)
+            return json.load(f)
     except (OSError, ValueError):
-        wait_for_press("No data - use Update", RED)
-        return
-    weeks = data["weeks"][-width:]
-    total = data.get("total_contributions", 0)
+        return None
+
+
+def graph_screen():
+    data = load_contribs()
     opened = time.ticks_ms()
     show_total_until = 0
     enc.delta()
     while not btn.pressed():
         now = time.ticks_ms()
+        if auto_update.poll():
+            data = load_contribs()
+            opened = now
         if enc.delta():
             show_total_until = time.ticks_add(now, 2500)
         blank()
-        if time.ticks_diff(show_total_until, now) > 0:
-            draw_text(f"{total} contribs", pen=GREEN)
+        if data is None:
+            draw_marquee("No data yet - check WiFi in secrets.py", opened, RED)
+        elif time.ticks_diff(show_total_until, now) > 0:
+            draw_text(f"{data.get('total_contributions', 0)} contribs", pen=GREEN)
         else:
-            # Sweep the columns in from the left when the graph first opens
+            weeks = data["weeks"][-width:]
+            # Sweep the columns in from the left when the graph (re)loads
             cols = min(len(weeks), time.ticks_diff(now, opened) // 10 + 1)
             for x in range(cols):
                 for day in weeks[x]["contribution_days"]:
@@ -444,6 +507,10 @@ time_changed = None
 current_app = None
 
 direction = 1
+
+# Boot straight into the contribution graph; pressing the button drops into the menu
+graph_screen()
+enc.delta()
 
 # Loop forever
 while True:
