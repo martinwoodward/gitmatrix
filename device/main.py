@@ -1,9 +1,64 @@
 import gc
+import os
+import json
 import time
+import machine
 import easing
 import contribution_widget  # noqa: F401
 from encoder import Encoder
 import random
+
+SETTINGS_FILE = "/settings.json"
+LAUNCH_FILE = "/launch.txt"
+BUTTON_PIN = 20  # board.SWITCH, active low
+APP_EXCLUDE = ("main.py", "boot.py", "secrets.py", "secrets.example.py")
+
+
+def load_settings():
+    try:
+        with open(SETTINGS_FILE) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def save_settings(s):
+    with open(SETTINGS_FILE, "w") as f:
+        json.dump(s, f)
+
+
+settings = load_settings()
+display.set_brightness(settings.get("brightness", 1.0))
+
+button = machine.Pin(BUTTON_PIN, machine.Pin.IN, machine.Pin.PULL_UP)
+
+
+def launch_pending_app():
+    # Apps are started from a fresh boot so they get clean PIO/RAM. Pressing the
+    # button while an app runs resets back to this menu.
+    try:
+        with open(LAUNCH_FILE) as f:
+            app = f.read().strip()
+        os.remove(LAUNCH_FILE)
+    except OSError:
+        return
+
+    def arm(_):
+        button.irq(trigger=machine.Pin.IRQ_FALLING, handler=lambda p: machine.reset())
+
+    # Delay arming so the press that launched the app doesn't immediately exit it
+    global _arm_timer
+    _arm_timer = machine.Timer(mode=machine.Timer.ONE_SHOT, period=1000, callback=arm)
+    print("Launching", app)
+    try:
+        with open(app) as f:
+            exec(f.read(), {"__name__": "__main__"})
+    except Exception as e:  # noqa: BLE001
+        print("App error:", e)
+    machine.reset()
+
+
+launch_pending_app()
 
 
 SNAP_THRESHOLD = 1  # Number of turns required to snap to the next item, for > 1 turns the timeout below applies
@@ -13,8 +68,6 @@ PEEK_AMOUNT = 0.45 # How far the next item shoud peek in, this value is eased so
 FONT = rom_font.sins
 GLOW = True  # glow around words
 CENTER_TEXT = True
-
-display.set_brightness(1)
 
 width = 53
 height = 7
@@ -138,6 +191,112 @@ class Ball:
 balls = [Ball() for _ in range(10)]
 
 
+class Button:
+    def __init__(self, pin):
+        self.pin = pin
+        self.last = pin.value()
+        self.changed = 0
+
+    def pressed(self):
+        v = self.pin.value()
+        now = time.ticks_ms()
+        if v != self.last and time.ticks_diff(now, self.changed) > 30:
+            self.last = v
+            self.changed = now
+            return v == 0
+        return False
+
+
+btn = Button(button)
+
+
+def draw_text(text, x=None, pen=None):
+    screen.font = FONT
+    tw, th = screen.measure_text(text)
+    if x is None:
+        x = (width - tw) // 2
+    screen.pen = pen or color.white
+    screen.text(text, vec2(x, (height - th) // 2))
+    return tw
+
+
+def blank():
+    screen.pen = color.rgb(0, 0, 0)
+    screen.clear()
+
+
+def brightness_screen():
+    level = display.get_brightness()
+    enc.delta()
+    while not btn.pressed():
+        d = enc.delta()
+        if d:
+            level = min(1.0, max(0.05, level + (0.05 if d > 0 else -0.05)))
+            display.set_brightness(level)
+        blank()
+        screen.pen = color.oklch(120, 150, 140)
+        screen.rectangle(0, 0, int(width * level), height)
+        draw_text(f"{int(level * 100 + 0.5)}%")
+        display.update()
+    settings["brightness"] = level
+    save_settings(settings)
+
+
+def apps_screen():
+    apps = sorted(f for f in os.listdir("/") if f.endswith(".py") and f not in APP_EXCLUDE)
+    apps.append("< Back")
+    idx = 0
+    shown = time.ticks_ms()
+    enc.delta()
+    while True:
+        d = enc.delta()
+        if d:
+            idx = (idx + (1 if d > 0 else -1)) % len(apps)
+            shown = time.ticks_ms()
+        if btn.pressed():
+            if apps[idx] == "< Back":
+                return
+            with open(LAUNCH_FILE, "w") as f:
+                f.write(apps[idx])
+            machine.reset()
+
+        blank()
+        name = apps[idx][:-3] if apps[idx].endswith(".py") else apps[idx]
+        pen = color.oklch(220, 150, idx * 40)
+        screen.font = FONT
+        tw, _ = screen.measure_text(name)
+        if tw <= width:
+            draw_text(name, pen=pen)
+        else:
+            # Marquee long names after a short pause
+            gap = 15
+            elapsed = time.ticks_diff(time.ticks_ms(), shown) - 700
+            x = 1 - (max(0, elapsed) // 40) % (tw + gap)
+            draw_text(name, x, pen)
+            draw_text(name, x + tw + gap, pen)
+        # Position indicator along the bottom row
+        screen.pen = color.rgb(60, 60, 60)
+        screen.rectangle(int(idx * width / len(apps)), height - 1, max(1, width // len(apps)), 1)
+        display.update()
+
+
+def coming_soon():
+    blank()
+    draw_text("Soon!", pen=color.oklch(200, 150, 60))
+    display.update()
+    time.sleep_ms(800)
+
+
+def open_mode(name):
+    if name.startswith("Brightn"):
+        brightness_screen()
+    elif name == "Apps":
+        apps_screen()
+    else:
+        coming_soon()
+    enc.delta()
+
+
 current_mode = 0
 next_mode = 1
 
@@ -154,6 +313,10 @@ direction = 1
 
 # Loop forever
 while True:
+    if current_app is not None and btn.pressed():
+        open_mode(modes[current_app][0])
+        continue
+
     canvas.pen = color.rgb(0, 0, 0)
     canvas.clear()
 

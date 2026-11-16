@@ -14,7 +14,7 @@ Everything here was pulled from the device on 2026-11-16.
 | RAM | ~8 MB PSRAM available to MicroPython |
 | Flash | 16 MB |
 | Display | 53 × 7 RGB LED matrix (shift-register driven) |
-| Input | Rotary encoder (GPIO 22 = A, GPIO 21 = B), one switch (`board.SWITCH`) |
+| Input | Rotary encoder (GPIO 22 = A, GPIO 21 = B) with push button (`board.SWITCH`, GPIO 20, active low, needs pull-up) |
 | Wireless | WiFi + Bluetooth (CYW43, pins `WL_*`) |
 | Audio | I2S output with amplifier (`I2S_*`, `AMP_EN`) |
 | Other | Light sensor (`LIGHT_SENSE`), logo/power/connection/text LEDs, Qw/ST I2C connector |
@@ -43,7 +43,7 @@ drivers, and `qwstpad`.
 
 | File | Purpose |
 |---|---|
-| `main.py` | Boot app. A menu you scroll with the encoder (Brightness, Volume, WiFi, Apps, Update, Test) with glowing scrolling text. Prototype only: selecting an item doesn't do anything yet. |
+| `main.py` | Boot app. A menu you scroll with the encoder (Brightness, Volume, WiFi, Apps, Update, Test). Press the encoder button to open an item. **Brightness:** turn to adjust, press to save to `/settings.json` (applied at boot). **Apps:** lists the `.py` files on the device; press to launch one. Apps launch via `/launch.txt` and a reset, and pressing the button while an app runs resets back to the menu. Other items show "Soon!". |
 | `gol.py` | Conway's Game of Life |
 | `fast_fire.py` | Fire effect (viper-optimised) |
 | `spiral.py`, `rainbow.py`, `rainbow_wheel.py`, `balls_demo.py` | Graphics demos |
