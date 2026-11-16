@@ -125,13 +125,14 @@ class App:
 
 # --- Graph ------------------------------------------------------------------------------
 
-LEVEL_PENS = [
-    color.rgb(0, 6, 2),
-    color.rgb(0, 45, 14),
-    color.rgb(0, 100, 30),
-    color.rgb(0, 170, 50),
-    color.rgb(70, 255, 110),
+LEVEL_RGB = [
+    (0, 6, 2),
+    (0, 45, 14),
+    (0, 100, 30),
+    (0, 170, 50),
+    (70, 255, 110),
 ]
+TWINKLE_MS = 900
 
 
 class Graph(App):
@@ -141,6 +142,7 @@ class Graph(App):
         super().__init__(data)
         self.version = -1
         self.cells = []
+        self.twinkles = {}  # cell index -> start ms
         self.ambient = Ambient(self.hue, count=4, alpha=25)
 
     def load(self):
@@ -151,7 +153,10 @@ class Graph(App):
         except (OSError, ValueError, KeyError):
             self.cells = []
             return
-        self.cells = [(x, d["weekday"], min(4, d["level"])) for x, w in enumerate(weeks) for d in w["contribution_days"]]
+        # Each square breathes at its own random speed and phase
+        self.cells = [(x, d["weekday"], min(4, d["level"]),
+                       random.uniform(0, 6.28), random.uniform(0.0012, 0.003))
+                      for x, w in enumerate(weeks) for d in w["contribution_days"]]
 
     def enter(self):
         if self.version != self.data.version or not self.cells:
@@ -160,18 +165,35 @@ class Graph(App):
     def _cols(self, t):
         return min(W, t // 12 + 1)
 
+    def _update_twinkles(self, t):
+        for i, start in list(self.twinkles.items()):
+            if t - start > TWINKLE_MS or t < start:
+                del self.twinkles[i]
+        if self.cells and random.random() < 0.12:
+            i = random.randrange(len(self.cells))
+            if self.cells[i][2] > 0:
+                self.twinkles[i] = t
+
     def _draw_cells(self, c, t, glow):
         cols = self._cols(t)
-        last = self.cells[-1] if self.cells else None
-        for cell in self.cells:
-            x, y, level = cell
-            if x >= cols or (glow and level < 2):
+        n = len(self.cells)
+        for i in range(n):
+            x, y, level, phase, speed = self.cells[i]
+            if x >= cols or (glow and level < 2 and i not in self.twinkles):
                 continue
-            pen = LEVEL_PENS[level]
-            if cell is last:
-                # Today pulses gently
-                pen = color.oklch(150 + int(90 * (0.5 + 0.5 * math.sin(t / 300))), 220, self.hue)
-            c.pen = pen
+            if i == n - 1:
+                # Today pulses more strongly
+                c.pen = color.oklch(150 + int(90 * (0.5 + 0.5 * math.sin(t / 300))), 220, self.hue)
+            else:
+                r, g, b = LEVEL_RGB[level]
+                f = 0.72 + 0.28 * math.sin(t * speed + phase) if level else 1.0
+                tw = self.twinkles.get(i)
+                if tw is not None:
+                    # Flare towards bright mint and fade back
+                    k = math.sin(math.pi * (t - tw) / TWINKLE_MS)
+                    r, g, b = r + (180 - r) * k, g + (255 - g) * k, b + (200 - b) * k
+                    f = f + (1 - f) * k
+                c.pen = color.rgb(int(r * f), int(g * f), int(b * f))
             c.rectangle(OX + x, OY + y, 1, 1)
 
     def glow(self, c, t):
@@ -182,6 +204,7 @@ class Graph(App):
         self._draw_cells(c, t, True)
 
     def crisp(self, c, t):
+        self._update_twinkles(t)
         if not self.cells:
             text(c, "No data", 8, rom_font.sins, color.oklch(180, 200, 25))
             return
