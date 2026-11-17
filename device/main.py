@@ -37,7 +37,7 @@ SNAP_THRESHOLD = 1  # Number of turns required to snap to the next item, for > 1
 SNAP_TIMEOUT_MS = 800
 SNAP_SPEED = 1.5  # Multiplier for how snappily the next item should slide in
 PEEK_AMOUNT = 0.45  # How far the next item shoud peek in, this value is eased so it's unintuitive
-FONT = rom_font.sins
+FONT = font.sins
 GLOW = True  # glow around words
 CENTER_TEXT = True
 MENU_IDLE_MS = 30 * 1000  # Return to the carousel after this long without input
@@ -60,7 +60,7 @@ modes = [
 ]
 
 def mode_scroll(text, font_face=None, fg=None, target=None):
-    font_face = font_face or rom_font.sins
+    font_face = font_face or font.sins
     fg = fg or color.white
 
     target = target or screen

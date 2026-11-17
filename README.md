@@ -7,9 +7,9 @@ with a 53×7 RGB LED matrix: one pixel per day for a year of GitHub contribution
 The **authoritative firmware** is
 [`firmware/contribution_widget-micropython-1.29-with-filesystem.uf2`](firmware/contribution_widget-micropython-1.29-with-filesystem.uf2)
 (MicroPython 1.29, received 2026-11-17). All future work targets it. The apps in `device/`
-were pulled from a device running the previous 1.27 build on 2026-11-16 (re-checked
-2026-11-17, unchanged) and still need porting to 1.29 (see
-[Changes from the 1.27 firmware](#changes-from-the-127-firmware)).
+were originally pulled from a device running the previous 1.27 build on 2026-11-16 and
+have been ported to 1.29 (see
+[Changes from the 1.27 firmware](#changes-from-the-127-firmware)); they no longer run on 1.27.
 
 ## Hardware
 
@@ -67,13 +67,14 @@ Frozen Python modules: `contribution_widget` (`__init__`, `filesystem`, `math`, 
 | `calendar.py` | Month pager driven by the encoder |
 | `hotlava.py` | Lava-lamp blobs |
 | `train-capacity.py` | Scrolling train showing carriage occupancy |
-| `gol.py`, `fast_fire.py`, `spiral.py`, `rainbow.py`, `rainbow_wheel.py`, `balls_demo.py` | The original demos, same as `device/backup/` except `gol.py` uses `font.sins` |
+| `gol.py`, `fast_fire.py`, `spiral.py`, `rainbow.py`, `rainbow_wheel.py`, `balls_demo.py` | The original demos, identical to `device/backup/` |
 
 #### Changes from the 1.27 firmware
 
 - MicroPython 1.27.0 (`feature/basepri`, SDK 2.1.1) → 1.29.0 + 4 local commits (SDK 2.3.0).
-- **`rom_font` is gone; use `font`** (e.g. `font.sins`). `device/main.py` and
-  `device/widgets.py` still use `rom_font` and must be updated before they run on 1.29.
+- **`rom_font` is gone; use `font`** (e.g. `font.sins`). The apps in `device/`
+  have been updated. Avoid naming local variables `font` in functions that also read the
+  global.
 - New `bt_audio` module: A2DP sink over BTstack with SBC decode, I2S output, volume and
   FFT data (`init`, `set_volume`, `fft_into`, `streaming`, `link_keys`...).
 - PicoVector additions: `brush` (`pattern`, `gradient`, `fractal`, `lighten`, `darken`),

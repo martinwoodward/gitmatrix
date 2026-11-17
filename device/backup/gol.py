@@ -252,7 +252,7 @@ buf = memoryview(display)
 # Save a couple of milliseconds since we never clear the display
 display.set_blocking(False)
 
-screen.font = rom_font.sins
+screen.font = font.sins
 
 
 while True:
