@@ -206,7 +206,7 @@ class Graph(App):
     def crisp(self, c, t):
         self._update_twinkles(t)
         if not self.cells:
-            text(c, "No data", 8, rom_font.sins, color.oklch(180, 200, 25))
+            text(c, "No data", 8, font.sins, color.oklch(180, 200, 25))
             return
         self._draw_cells(c, t, False)
 
@@ -215,7 +215,7 @@ class Graph(App):
 
 class Clock(App):
     hue = 200
-    font = rom_font.match
+    font = font.match
 
     def __init__(self, data):
         super().__init__(data)
@@ -241,7 +241,7 @@ class Clock(App):
 
     def _layout(self, suffix):
         colon = 3
-        width = self.adv * 4 + colon + (text_width(suffix, rom_font.kobold) + 2 if suffix else 0)
+        width = self.adv * 4 + colon + (text_width(suffix, font.kobold) + 2 if suffix else 0)
         x = (W - width) // 2
         return [x, x + self.adv, x + self.adv * 2 + colon, x + self.adv * 3 + colon], x + self.adv * 2, x + self.adv * 4 + colon + 2
 
@@ -289,7 +289,7 @@ class Clock(App):
             c.rectangle(OX + colon_x, OY + 2, 1, 1)
             c.rectangle(OX + colon_x, OY + 4, 1, 1)
         if suffix:
-            text(c, suffix, suffix_x, rom_font.kobold, pen)
+            text(c, suffix, suffix_x, font.kobold, pen)
 
 
 # --- Counters -----------------------------------------------------------------------------
@@ -338,7 +338,7 @@ ICONS = {
 
 
 class Counter(App):
-    font = rom_font.sins
+    font = font.sins
     count_up_ms = 1400
 
     def __init__(self, data, name, hue, alpha_icon=False):
