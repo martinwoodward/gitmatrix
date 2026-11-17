@@ -4,7 +4,12 @@ Code and firmware backup for the **GitHub Contribution Widget**, a prototype Pim
 with a 53×7 RGB LED matrix: one pixel per day for a year of GitHub contributions
 (53 weeks × 7 days).
 
-Everything here was pulled from the device on 2026-11-16.
+The **authoritative firmware** is
+[`firmware/contribution_widget-micropython-1.29-with-filesystem.uf2`](firmware/contribution_widget-micropython-1.29-with-filesystem.uf2)
+(MicroPython 1.29, received 2026-11-17). All future work targets it. The apps in `device/`
+were pulled from a device running the previous 1.27 build on 2026-11-16 (re-checked
+2026-11-17, unchanged) and still need porting to 1.29 (see
+[Changes from the 1.27 firmware](#changes-from-the-127-firmware)).
 
 ## Hardware
 
@@ -26,18 +31,79 @@ Pin names are available on the device via `import board; dir(board)`.
 
 ### Firmware: `firmware/`
 
+`contribution_widget-micropython-1.29-with-filesystem.uf2` (3.8 MB, SHA-256
+`986c29d7…69e714`) is a single image containing firmware, fonts and a starter filesystem:
+
+| Flash range | Size | Contents |
+|---|---|---|
+| `0x10000000–0x10154a00` | 1.3 MB | MicroPython `v1.29.0-4.g2429603c55.dirty`, Pico SDK 2.3.0, built 2026-09-15 (MinSizeRel), board `pimoroni_contribution_widget`, RP2350 ARM Secure |
+| `0x10200000–0x10266700` | 409 KB | Read-only ROMFS, mounted at `/rom`. The same 37 `.ppf` fonts as before (byte-identical to `device/rom/fonts/`) |
+| `0x10300000–0x10316000` | 88 KB | LittleFS v2.1 user filesystem (4 KB blocks, formatted with a block count of 22). Unpacked into [`firmware/filesystem/`](firmware/filesystem) |
+
+Flashing this UF2 **overwrites the start of the user filesystem**, so back up the
+device (and `secrets.py`) first. To unpack it yourself:
+
+```sh
+pip install littlefs-python   # optional, needed for the user filesystem
+python3 tools/uf2_extract.py firmware/contribution_widget-micropython-1.29-with-filesystem.uf2 /tmp/uf2
+```
+
+Frozen Python modules: `contribution_widget` (`__init__`, `filesystem`, `math`, `memory`,
+`sprite`, `text`), `board`, `boot`, `_boot`, `_boot_fat`, `pimoroni`, `ezwifi`, `easing`,
+`qwstpad`, `version`, `rp2`, `asyncio`, `aioble`, `umqtt.simple`, `requests`/`urequests`,
+`urllib.urequest`, `ntptime`, `mip`, `ssl`, `datetime`, `webrepl`, `neopixel`, `onewire`,
+`ds18x20`, `dht`. Native modules include `picovector` (`screen`, `image`, `color`,
+`shape`, `brush`, `font`, `vec2`, `mat3`), `encoder`, `bt_audio`, `ulab`, `qrcode`,
+`adcfft`, `bluetooth` and the Pimoroni `breakout_*` drivers.
+
+#### Starter filesystem (`firmware/filesystem/`)
+
+| File | Purpose |
+|---|---|
+| `main.py` | Boots straight into `bt_audio_visualiser` |
+| `bt_audio_visualiser.py` | Bluetooth A2DP speaker ("Widget") with Winamp-style visualiser modes. Turn to change mode, hold the button and turn for volume. Core 1 runs I2S and a 512-bin FFT |
+| `bt_audio_spectrum.py` | Simpler A2DP spectrum analyser, encoder is volume |
+| `snappy_menu.py` | Encoder-driven scrolling text menu with snap and peek animation |
+| `calendar.py` | Month pager driven by the encoder |
+| `hotlava.py` | Lava-lamp blobs |
+| `train-capacity.py` | Scrolling train showing carriage occupancy |
+| `gol.py`, `fast_fire.py`, `spiral.py`, `rainbow.py`, `rainbow_wheel.py`, `balls_demo.py` | The original demos, same as `device/backup/` except `gol.py` uses `font.sins` |
+
+#### Changes from the 1.27 firmware
+
+- MicroPython 1.27.0 (`feature/basepri`, SDK 2.1.1) → 1.29.0 + 4 local commits (SDK 2.3.0).
+- **`rom_font` is gone; use `font`** (e.g. `font.sins`). `device/main.py` and
+  `device/widgets.py` still use `rom_font` and must be updated before they run on 1.29.
+- New `bt_audio` module: A2DP sink over BTstack with SBC decode, I2S output, volume and
+  FFT data (`init`, `set_volume`, `fft_into`, `streaming`, `link_keys`...).
+- PicoVector additions: `brush` (`pattern`, `gradient`, `fractal`, `lighten`, `darken`),
+  image filters (`blur`, `bloom`, `pixelate`, `vignette`, `crt`, `glitch`, `oilpaint`...),
+  palettes (`gameboy`, `c64`, `cga`, `synthwave`...), colour helpers (`mix`, `saturate`,
+  `luminance`, `to_oklch`), `vector_font`/`load_font`, `screen.antialias`, `hspan`/`vspan`.
+
+#### Previous firmware (`firmware/previous/`)
+
 | File | Contents |
 |---|---|
-| `contribution_widget-micropython-1.27.uf2` | MicroPython 1.27.0 (branch `feature/basepri`, built 2026-03-13, Pico SDK 2.1.1, board `pimoroni_contribution_widget`). Flash range `0x10000000–0x10125a44`. |
-| `romfs.uf2` | Read-only ROMFS at `0x10200000–0x10300000`, mounted at `/rom`. Contains the 37 `.ppf` fonts. |
+| `contribution_widget-micropython-1.27.uf2` | MicroPython 1.27.0 (branch `feature/basepri`, built 2026-03-13, Pico SDK 2.1.1). Flash range `0x10000000–0x10125a44`. What the device shipped with. |
+| `romfs.uf2` | ROMFS at `0x10200000–0x10300000` from the same device. |
 
-The read/write user filesystem (`0x10300000–0x11000000`, 13 MB) was **not** dumped
-because it contains `secrets.py`. Its non-secret contents are in `device/`.
+### Public sources
 
-Frozen modules in the firmware include `contribution_widget` (display driver and
-graphics globals), `picovector`, `easing`, `encoder`, `ezwifi`, `requests`/`urequests`,
-`ntptime`, `aioble`, `umqtt.simple`, `qrcode`, `ulab`, `adcfft`, the Pimoroni `breakout_*`
-drivers, and `qwstpad`.
+The exact build commit (`2429603c55`) isn't public, but the pieces come from:
+
+| Component | Source |
+|---|---|
+| MicroPython core | [micropython/micropython v1.29.0](https://github.com/micropython/micropython/releases/tag/v1.29.0), with Pimoroni patches from [pimoroni/micropython](https://github.com/pimoroni/micropython) (`bw-1.29.0` branches) |
+| Pico SDK | [raspberrypi/pico-sdk 2.3.0](https://github.com/raspberrypi/pico-sdk/releases/tag/2.3.0) (includes BTstack and the CYW43 driver) |
+| Board layout and `contribution_widget` Python modules | Modelled on the Badgeware boards: [pimoroni/blinky2350](https://github.com/pimoroni/blinky2350) (`modules/common/badgeware/` → `contribution_widget/`), [tufty2350](https://github.com/pimoroni/tufty2350), [badger2350](https://github.com/pimoroni/badger2350). Docs at [pimoroni/badgeware-docs](https://github.com/pimoroni/badgeware-docs) |
+| Fonts (ROMFS) | [pimoroni/blinky2350 `romfs/fonts`](https://github.com/pimoroni/blinky2350/tree/main/romfs/fonts) (all 37 files byte-identical) |
+| Graphics | [pimoroni/picovector](https://github.com/pimoroni/picovector) and [pimoroni/picovector-micropython](https://github.com/pimoroni/picovector-micropython) |
+| `breakout_*`, `encoder`, `qrcode`, `adcfft`, `pimoroni` | [pimoroni/pimoroni-pico](https://github.com/pimoroni/pimoroni-pico) |
+| `ezwifi` | [pimoroni/presto `modules/py_frozen/ezwifi.py`](https://github.com/pimoroni/presto/blob/main/modules/py_frozen/ezwifi.py) |
+| `ulab` | [v923z/micropython-ulab](https://github.com/v923z/micropython-ulab) |
+| `aioble`, `umqtt`, `requests`, `datetime`, `mip`... | [micropython/micropython-lib](https://github.com/micropython/micropython-lib) |
+| Demo apps | Adapted from Pimoroni examples, e.g. [`balls_demo.py`](https://github.com/pimoroni/explorer/blob/main/examples/balls_demo.py) and [`rainbow_wheel.py`](https://github.com/pimoroni/pimoroni-pico/blob/main/micropython/examples/pico_display/rainbow_wheel.py). `bt_audio_*`, `snappy_menu`, `calendar`, `hotlava`, `train-capacity` and `contribution_widget` itself have no public source yet. |
 
 ### Device filesystem: `device/`
 
@@ -50,7 +116,7 @@ drivers, and `qwstpad`.
 | `backup/` | The original demo apps (`gol.py`, `fast_fire.py`, `spiral.py`, `rainbow.py`, `rainbow_wheel.py`, `balls_demo.py`). Not part of the menu any more, but can still be run with `mpremote` (see below). |
 | `contrib_data.json` | Sample contribution graph (schema `v2`: `weeks[53].contribution_days[7]` with `count`/`level`, `colors_full`, `months`, `total_contributions`). Same format as `https://github.com/<user>.contribs`; the **Update** menu item replaces it with your own data. |
 | `user_data.json` | Sample GitHub `/users/<login>` API response (@Gadgetoid) |
-| `rom/fonts/*.ppf` | Copy of the ROMFS fonts, available on the device as `rom_font.<name>` |
+| `rom/fonts/*.ppf` | Copy of the ROMFS fonts, available on the device as `font.<name>` (`rom_font.<name>` on 1.27) |
 | `secrets.example.py` | Template for `secrets.py` (see below) |
 
 ## Data sources
@@ -112,7 +178,7 @@ mpremote reset                            # reboot into main.py
 
 ### 4. Run an app without installing it
 
-Apps rely on globals (`screen`, `display`, `color`, `rom_font`, `vec2`, `shape`,
+Apps rely on globals (`screen`, `display`, `color`, `font`, `brush`, `vec2`, `shape`,
 `image`, `mat3`...) that are set up when `contribution_widget` is imported:
 
 ```sh
@@ -135,7 +201,7 @@ import contribution_widget  # sets up the globals
 
 screen.pen = color.rgb(0, 0, 0)
 screen.clear()
-screen.font = rom_font.sins
+screen.font = font.sins                    # rom_font.sins on 1.27
 screen.pen = color.oklch(200, 255, 120)   # lightness, chroma, hue[, alpha]
 screen.text("Hello", vec2(2, 0))
 screen.line(0, 6, 52, 6)
@@ -155,11 +221,15 @@ enc.delta()
 
 1. Enter BOOTSEL: `mpremote exec "import machine; machine.bootloader()"`
    (or hold BOOT while plugging in).
-2. Flash:
+2. Flash the current firmware (firmware, fonts and starter filesystem in one go):
    ```sh
-   picotool load -x firmware/contribution_widget-micropython-1.27.uf2
-   picotool load firmware/romfs.uf2 && picotool reboot
+   picotool load -x firmware/contribution_widget-micropython-1.29-with-filesystem.uf2
+   ```
+   Or roll back to the previous build:
+   ```sh
+   picotool load -x firmware/previous/contribution_widget-micropython-1.27.uf2
+   picotool load firmware/previous/romfs.uf2 && picotool reboot
    ```
 
-Backups were taken with `picotool save -p` (program) and
+The 1.27 backups were taken with `picotool save -p` (program) and
 `picotool save -r 0x10200000 0x10300000` (ROMFS).
