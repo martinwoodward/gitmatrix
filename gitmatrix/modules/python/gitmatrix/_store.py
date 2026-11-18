@@ -41,6 +41,8 @@ MANIFEST = "package.json"
 
 REFRESH_MS = 15 * 60 * 1000       # index refresh while online
 RETRY_MS = 60 * 1000              # after a failed refresh
+QUICK_RETRY_MS = 10 * 1000        # after the first QUICK_RETRIES failures in a row: the
+QUICK_RETRIES = 2                 # first fetch just after joining can time out (ETIMEDOUT)
 MANUAL_REFRESH_MS = 10 * 1000     # rate limit for the Refresh button
 TIMEOUT_S = 10                    # no data for this long fails a download
 TOTAL_TIMEOUT_MS = 60 * 1000      # one file, start to finish
@@ -403,6 +405,7 @@ class Store:
         self.checked_at = None     # ticks of the last refresh attempt
         self.fetched_at = None     # ticks of the last good fetch
         self.error = None
+        self.failures = 0          # failed refreshes in a row
         self.refreshing = False
         self.progress = None       # install/update progress for the UI
         self.pending_cache = None  # index to write once Bluetooth audio stops
@@ -429,7 +432,10 @@ class Store:
             return False
         if self.checked_at is None:
             return True
-        wait = RETRY_MS if self.error else REFRESH_MS
+        if not self.error:
+            wait = REFRESH_MS
+        else:
+            wait = QUICK_RETRY_MS if self.failures <= QUICK_RETRIES else RETRY_MS
         return _compat.ticks_diff(now, self.checked_at) >= wait
 
     def refresh_wait_ms(self, now=None):
@@ -453,10 +459,12 @@ class Store:
             self.index = index
             self.index_repo = key
             self.error = None
+            self.failures = 0
             self.fetched_at = _compat.ticks_ms()
             return True
         except Exception as e:  # noqa: BLE001 - offline, DNS, HTTP, bad JSON: keep the cache
             self.error = _compat.error_text(e)
+            self.failures += 1
             _log.log(f"store: index refresh failed ({self.error})")
             return False
         finally:

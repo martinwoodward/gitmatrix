@@ -153,6 +153,19 @@ def test_failed_refresh_keeps_the_cache(store):
     assert store.store.due(store.clock.advance(_store.RETRY_MS))
 
 
+def test_failed_first_refresh_retries_quickly_then_backs_off(store):
+    # e.g. ETIMEDOUT on the first fetch right after joining WiFi
+    for _ in range(_store.QUICK_RETRIES):
+        assert not run(store.store.refresh())
+        assert not store.store.due(store.clock.advance(_store.QUICK_RETRY_MS - 1))
+        assert store.store.due(store.clock.advance(1))
+    assert not run(store.store.refresh())
+    assert not store.store.due(store.clock.advance(_store.QUICK_RETRY_MS))
+    assert store.store.due(store.clock.advance(_store.RETRY_MS))
+    store.remote.publish("demo", {"__init__.py": GOOD})
+    assert run(store.store.refresh()) and store.store.failures == 0
+
+
 def test_repo_comes_from_firmware_config_only(store):
     _runtime.firmware = {"PLUGIN_REPO": "a/b", "PLUGIN_BRANCH": "dev"}
     assert _store.base_url() == "https://raw.githubusercontent.com/a/b/dev/"
