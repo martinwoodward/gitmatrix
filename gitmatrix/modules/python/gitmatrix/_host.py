@@ -445,7 +445,7 @@ class Host:
             if disabled and name not in q:
                 continue
             plugin = self.loader.plugins.get(name)
-            title = plugin.title if plugin is not None else name.replace("_", " ").capitalize()
+            title = plugin.title if plugin is not None else _compat.cap_first(name.replace("_", " "))
             out.append((name, title, name in q))
         return out
 

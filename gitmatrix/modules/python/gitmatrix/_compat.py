@@ -62,6 +62,11 @@ def _no_guard():
 guard = _no_guard
 
 
+def cap_first(s):
+    """str.capitalize(): MicroPython's str doesn't have it."""
+    return s[:1].upper() + s[1:].lower()
+
+
 def makedirs(path):
     """mkdir -p, MicroPython has no os.makedirs."""
     built = ""

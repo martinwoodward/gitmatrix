@@ -200,6 +200,11 @@ The tests run the real runtime under CPython against the stubs in `tests/stubs`.
 `rig` (in `conftest.py`) boots the whole thing and lets a test turn and press the knob
 and step frames on a fake clock.
 
+`tests/test_micropython_syntax.py` rejects code CPython accepts but MicroPython 1.29
+doesn't (`*`/`**` in displays, `builtins.<global>` reads, `hexdigest()`, missing `str`
+methods such as `capitalize()`). With `pip install 'mpy-cross==1.29.*'` it also compiles
+every device file with the real 1.29 compiler; without it those cases are skipped.
+
 ## Safe mode and recovery
 
 - Hold the knob while powering on, or crash 3 times before reaching 60 s of uptime: the
