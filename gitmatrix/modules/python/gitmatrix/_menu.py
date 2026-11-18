@@ -363,7 +363,7 @@ class Menu:
                     return False
             return True
 
-        return SnappyScreen((*labels(), "< Back"), select, start)
+        return SnappyScreen(labels() + ("< Back",), select, start)
 
     def _bluetooth_screen(self, start=0):
         api = self.api

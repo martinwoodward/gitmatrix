@@ -194,8 +194,8 @@ gitmatrix.input.turns()         # input plugins: detents since the last call
 gitmatrix.input.events()        # input plugins: new events since the last call
 
 gitmatrix.show_message("Saved!")
-gitmatrix.reboot()              # saves, then reboots via the watchdog (never machine.reset());
-                                # warm resets can hang the board until replugged, so avoid it
+gitmatrix.reboot()              # saves, then soft-resets (machine.soft_reset(); never machine.reset(),
+                                # whose warm reset can hang the board until replugged)
 gitmatrix.WIDTH, gitmatrix.HEIGHT   # 53, 7
 ```
 

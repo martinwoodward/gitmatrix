@@ -61,6 +61,16 @@ def test_joins_configured_network_with_ap_off():
     assert w.status()["mdns"] == "http://desk.local"
 
 
+def test_interfaces_left_up_by_a_soft_reset_are_restarted():
+    w, net = make("new", "secret123")
+    net.sta.on = net.sta.up = True  # still joined to the old network
+    net.ap.on = True                # setup AP from the last boot
+    w.start(0)
+    assert not net.ap.on
+    assert net.sta.on and not net.sta.up  # rejoining, with the new hostname
+    assert net.sta.joins == [("new", "secret123")]
+
+
 def test_open_network_joins_without_password():
     w, net = make("cafe")
     w.start(0)

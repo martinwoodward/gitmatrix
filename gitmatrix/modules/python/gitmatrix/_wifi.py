@@ -150,6 +150,15 @@ class WiFi:
             _log.log(f"wifi: hostname not set ({_compat.error_text(e)})")
         self.sta = net.WLAN(net.STA_IF)
         self.ap = net.WLAN(net.AP_IF)
+        # The CYW43 keeps its interfaces up across a soft reset (a reboot). Take
+        # them down so the old network/AP go away and mDNS, which registers the
+        # hostname as an interface comes up, answers to the current name.
+        for wlan in (self.sta, self.ap):
+            try:
+                if wlan.active():
+                    wlan.active(False)
+            except OSError as e:
+                _log.log(f"wifi: reset failed {_compat.error_text(e)}")
         if self.ssid is None:
             self.mode = SETUP
             self._ap(True)

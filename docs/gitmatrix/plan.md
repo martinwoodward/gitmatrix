@@ -127,7 +127,7 @@ main.py
 - No WiFi configured → AP `GitMatrix` at 192.168.4.1 + captive DNS. AP is **WPA2** with a default password **`monalisa`** (user asked for `mona`; WPA2 requires 8–63 chars; changeable in `/gitmatrix_config.py`), shown on the display and in the menu's WiFi screen. AP turned off once STA connects. If the configured network fails for **1 min**, the AP starts as well while STA keeps retrying; it stops once STA connects.
 - Pages: Home (now showing, reorder/enable/disable, delay, Show now), Discover, Plugin settings, Notifications (test sender), Settings (brightness, volume, hostname, timezone, optional API token, alert sound on/off + quiet-hours schedule), Sounds (built-ins, upload/delete custom), WiFi (scan → pick → password → save → reboot), Bluetooth, System (usage, version, reboot, logs, plugin errors/quarantine).
 - **Scan while streaming** briefly starves A2DP → UI warns "audio may stutter" (or defer until paused).
-- **Implemented (phase 2)**: `gitmatrix._wifi` (state machine ticked every 500 ms from the asyncio loop; `WLAN.scan()` can't yield (one C call, up to 10 s, no async/per-channel form; core1 belongs to `bt_audio` so no thread), so it's isolated: setup mode scans once at boot before the event loop starts, and web rescans are explicit, rate-limited to one per 15 s (429 otherwise) and keep the watchdog fed via a soft Timer while Python tasks pause; `wifi.py` is an Art Matrix-compatible shim over it), `gitmatrix._web` (phew routes, JSON API under `/api/v1/`, static pages from `/html`, captive 302 to `/wifi.html` in AP mode), `gitmatrix._log` (RAM ring, never written to flash). Saving WiFi schedules a watchdog reboot (`gitmatrix.reboot()`), never `machine.reset()`. Phase 0 later found that any warm reset (including the watchdog) hangs this board about 1 in 3 times until it's replugged ([phase0.md](phase0.md)), so later phases apply changes in place and keep reboots to WiFi changes, System → Reboot and hung plugins. Discover, Plugin settings, Notifications and Sounds pages were placeholders (filled in by phases 3 and 4). Not yet done: *hold 10 s → WiFi reset* (§2.2); use Forget network in the UI, or clear `wifi_ssid` in `/config.py`.
+- **Implemented (phase 2)**: `gitmatrix._wifi` (state machine ticked every 500 ms from the asyncio loop; `WLAN.scan()` can't yield (one C call, up to 10 s, no async/per-channel form; core1 belongs to `bt_audio` so no thread), so it's isolated: setup mode scans once at boot before the event loop starts, and web rescans are explicit, rate-limited to one per 15 s (429 otherwise) and keep the watchdog fed via a soft Timer while Python tasks pause; `wifi.py` is an Art Matrix-compatible shim over it), `gitmatrix._web` (phew routes, JSON API under `/api/v1/`, static pages from `/html`, captive 302 to `/wifi.html` in AP mode), `gitmatrix._log` (RAM ring, never written to flash). Saving WiFi schedules a reboot (`gitmatrix.reboot()`, a `machine.soft_reset()` with the watchdog stopped; see [ondevice.md](ondevice.md)), never `machine.reset()`. Phase 0 later found that any warm reset (including the watchdog) hangs this board about 1 in 3 times until it's replugged ([phase0.md](phase0.md)), so later phases apply changes in place and keep reboots to WiFi changes, System → Reboot and hung plugins. Discover, Plugin settings, Notifications and Sounds pages were placeholders (filled in by phases 3 and 4). Not yet done: *hold 10 s → WiFi reset* (§2.2); use Forget network in the UI, or clear `wifi_ssid` in `/config.py`.
 
 ### 2.8 Security (matches Art Matrix)
 - Web UI and API are **open on the LAN** by default, like Art Matrix.
@@ -194,32 +194,32 @@ Built in phase 5; full reference in [api.md](api.md), design as built in §8.
 - On-device smoke + soak via `mpremote`: boot, AP, install, notify, 1-hour streaming soak logging `underruns()`, power-cut-during-install.
 - ruff with artmatrix config.
 
-### 5.1 Phase 2 on-device checklist (not yet run; host harness only)
-- [ ] `network.WLAN.SEC_WPA2` exists on 1.29 and the setup AP really is WPA2 with `monalisa`.
-- [ ] STA + AP coexist (fallback AP while STA retries), and the AP drops once STA connects.
-- [ ] `network.hostname()` set before `active(True)` makes `gitmatrix.local` resolve (mDNS).
-- [ ] `asyncio.start_server` works on 1.29, and tasks created in `boot()` (captive DNS) survive `asyncio.run`; the DNS socket survives AP restarts.
-- [ ] Captive portal opens the WiFi page on iOS and Android.
-- [ ] Scan duration and the display/web stall during a web rescan (expect ~1-3 s); audio underruns while A2DP streams; same for page loads.
-- [ ] Soft `machine.Timer(-1)` callbacks run inside `WLAN.scan()`'s wait so the watchdog stays fed (try a long passive scan with a short WDT).
-- [ ] The boot pre-scan in setup mode with the AP already up: networks are listed on first page load and the AP stays up.
-- [ ] Save & reboot → watchdog reboot → joins the new network (if the display stays dark, replug: warm resets can hang, see [phase0.md](phase0.md)).
-- [ ] `bt_audio.set_pairable` exists (else the toggle only changes config).
-- [ ] Free RAM with phew loaded, and page load speed from flash.
+### 5.1 Phase 2 on-device checklist (run on device; results in `ondevice.md`)
+- [x] `network.WLAN.SEC_WPA2` exists on 1.29 and the setup AP really is WPA2 with `monalisa`.
+- [~] STA + AP coexist (fallback AP while STA retries), and the AP drops once STA connects. *(AP drops on join: yes. Fallback AP after a failed join not run.)*
+- [x] `network.hostname()` set before `active(True)` makes `gitmatrix.local` resolve (mDNS).
+- [x] `asyncio.start_server` works on 1.29, and tasks created in `boot()` (captive DNS) survive `asyncio.run`; the DNS socket survives AP restarts.
+- [ ] *(not run: needs a phone on the setup AP)* Captive portal opens the WiFi page on iOS and Android.
+- [~] *(web rescan is async: 202 in 0.27 s, 3 networks in ~7 s; stall under A2DP not run)* Scan duration and the display/web stall during a web rescan (expect ~1-3 s); audio underruns while A2DP streams; same for page loads.
+- [ ] *(not run: needs a deliberate watchdog trip, which can hang the chip)* Soft `machine.Timer(-1)` callbacks run inside `WLAN.scan()`'s wait so the watchdog stays fed (try a long passive scan with a short WDT).
+- [ ] *(not checked: the AP was seen, but the first-load list wasn't inspected)* The boot pre-scan in setup mode with the AP already up: networks are listed on first page load and the AP stays up.
+- [x] Save & reboot → reboot (now a soft reset) → joins the new network.
+- [x] *(it doesn't: `pairable_supported` is false)* `bt_audio.set_pairable` exists (else the toggle only changes config).
+- [x] Free RAM with phew loaded, and page load speed from flash.
 
-### 5.2 Phase 3 on-device checklist (not yet run; host harness only)
-- [ ] `hashlib.sha1` exists on 1.29 (package hashes; without it installs fail with "no sha1").
-- [ ] `fetch.AsyncFetch` with `CERT_NONE` reaches raw.githubusercontent.com; index refresh doesn't visibly stall the display or cause underruns.
-- [ ] `os.rename` of a **directory** works between `/lib/plugins` and `/.install` on littlefs (the swap and the rollback both rely on it).
-- [ ] `os.statvfs("/")` gives a sensible free figure (the free-space check and the Discover page).
-- [ ] `bt_audio.deinit()` exists; the pause path (`link_keys()` → `deinit()` → write → `load_link_keys()` → `init(name="GitMatrix")`) keeps the pairing, restores volume and pairable, and the phone/Mac can reconnect by hand. Check `load_link_keys(b"")` after Forget is accepted.
-- [ ] Install, settings save, `/config` save and Remove while streaming: 409 without `pause_audio`, no hang with it; a queued install runs once playback stops.
-- [ ] No flash write happens while streaming (state, config, link keys, index cache all wait): stream for 30+ minutes while changing brightness and switching plugins, then check they're saved after playback stops.
-- [ ] Power cut mid-install (pull USB during "writing to flash") → boot reconcile restores the old version or removes a fresh one; `/.install` empty afterwards.
-- [ ] Memory: a ~40 KB plugin installs from the RAM stage; a larger one stages on flash with the audio paused.
-- [ ] Thumbnails (53×7 PNG) load in the browser straight from raw.githubusercontent.com.
-- [ ] A ported Art Matrix plugin's `config.html` renders at `/config?plugin=<name>` and `process_config(form)` is called on save.
-- [ ] The three example plugins from `martinwoodward/gitmatrix-plugins` install, run and keep their settings across an update.
+### 5.2 Phase 3 on-device checklist (run on device; results in `ondevice.md`)
+- [x] `hashlib.sha1` exists on 1.29 (package hashes; without it installs fail with "no sha1").
+- [x] `fetch.AsyncFetch` with `CERT_NONE` reaches raw.githubusercontent.com; index refresh doesn't visibly stall the display or cause underruns.
+- [x] `os.rename` of a **directory** works between `/lib/plugins` and `/.install` on littlefs (the swap and the rollback both rely on it).
+- [x] `os.statvfs("/")` gives a sensible free figure (the free-space check and the Discover page).
+- [ ] *(audio tests pending)* `bt_audio.deinit()` exists; the pause path (`link_keys()` → `deinit()` → write → `load_link_keys()` → `init(name="GitMatrix")`) keeps the pairing, restores volume and pairable, and the phone/Mac can reconnect by hand. Check `load_link_keys(b"")` after Forget is accepted.
+- [ ] *(audio tests pending)* Install, settings save, `/config` save and Remove while streaming: 409 without `pause_audio`, no hang with it; a queued install runs once playback stops.
+- [ ] *(audio tests pending)* No flash write happens while streaming (state, config, link keys, index cache all wait): stream for 30+ minutes while changing brightness and switching plugins, then check they're saved after playback stops.
+- [ ] *(not run: replug budget)* Power cut mid-install (pull USB during "writing to flash") → boot reconcile restores the old version or removes a fresh one; `/.install` empty afterwards.
+- [~] *(the examples, a few KB each, install from the RAM stage; the flash stage isn't run)* Memory: a ~40 KB plugin installs from the RAM stage; a larger one stages on flash with the audio paused.
+- [x] Thumbnails (53×7 PNG) load in the browser straight from raw.githubusercontent.com.
+- [x] A ported Art Matrix plugin's `config.html` renders at `/config?plugin=<name>` and `process_config(form)` is called on save.
+- [x] The three example plugins from `martinwoodward/gitmatrix-plugins` install, run and keep their settings across an update.
 
 ### 5.3 Phase 4 on-device checklist (not yet run; host harness only)
 - [ ] Each built-in sound (`chime`, `ping`, `alert`, `success`, `error`, `doorbell`, `coin`) plays from the Sounds page on the left channel at the set volume, with no clicks at start/end; `amp_en` goes low afterwards.

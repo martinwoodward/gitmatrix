@@ -75,8 +75,8 @@ def show_message(text, ms=3000):
 
 
 def reboot():
-    """Save everything, then reboot via a watchdog timeout. On this board
-    machine.reset() can leave USB dead until a power cycle; never call it."""
+    """Save everything, then soft-reset. Warm resets (machine.reset(), the
+    watchdog) can hang this board until a power cycle; never use them."""
     from gitmatrix import _flash, _persist
 
     # stop the Bluetooth sink if it's playing: a flash write then can hang the board

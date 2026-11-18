@@ -35,9 +35,10 @@ gitmatrix/
       _sounds    built-in/custom sounds, uploads, I2S playback
       _png       PNG size checks, fit to 7 rows, decode
       _config    /config.py load / migrate / save-in-place
-      _persist   crash marker + boot counter (machine.mem_backup()[0..1]), watchdog reboot
+      _persist   crash marker + boot counter (machine.mem_backup()[0..1]), soft-reset reboot
       _wifi      STA / setup AP / fallback AP state machine, mDNS name, scans, captive DNS
       _mqtt      optional async MQTT client + Home Assistant discovery (off by default)
+      _ntp       sets the RTC from NTP while online (non-blocking UDP)
       _web       phew routes: JSON API under /api/v1, token auth, static pages, captive redirect
       _log       in-RAM log ring (shown on the System page; never written to flash)
       glow       shared drawing helpers for built-in plugins
@@ -204,9 +205,9 @@ and step frames on a fake clock.
 - Hold the knob while powering on, or crash 3 times before reaching 60 s of uptime: the
   device boots with no plugins, and the menu still works.
 - A plugin that hangs trips the 8 s watchdog. It's quarantined on the next boot.
-- Warm resets are avoided where possible: on this board `machine.reset()`, a watchdog
-  reset or `picotool reboot` hangs the whole chip about one time in three until it is
-  unplugged ([phase0.md](../docs/gitmatrix/phase0.md)). Settings, MQTT and plugin changes
-  apply in place. WiFi save/forget, **System → Reboot** and `deploy.py --reset` still
-  reboot via the watchdog (`gitmatrix.reboot()`, never `machine.reset()`), as does a hung
-  plugin; if the device doesn't come back within a few seconds, replug it.
+- Warm resets are avoided: on this board `machine.reset()`, a watchdog reset or
+  `picotool reboot` hangs the whole chip about one time in three until it is unplugged
+  ([phase0.md](../docs/gitmatrix/phase0.md)). Settings, MQTT and plugin changes apply in
+  place. Reboots (WiFi save/forget, **System → Reboot**, `deploy.py --reset`) are soft
+  resets: `gitmatrix.reboot()` stops the watchdog, then calls `machine.soft_reset()`
+  ([ondevice.md](../docs/gitmatrix/ondevice.md)).

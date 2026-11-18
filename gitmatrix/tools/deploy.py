@@ -15,6 +15,7 @@ import argparse
 import pathlib
 import subprocess
 import sys
+import time
 
 HERE = pathlib.Path(__file__).resolve().parent.parent
 
@@ -58,33 +59,57 @@ def device_dirs(files):
     return sorted(dirs, key=lambda d: (d.count("/"), d))
 
 
-def commands(files, port=None, reset=False):
+def commands(files, port=None):
     mkdirs = "import os\nfor d in %r:\n try:\n  os.mkdir(d)\n except OSError:\n  pass" % device_dirs(files)
     cmd = ["mpremote"] + (["connect", port] if port else [])
     cmd += ["exec", STOP_WATCHDOG, "+", "exec", mkdirs]
     for src, dst in files:
         cmd += ["+", "fs", "cp", str(src), ":" + dst]
-    if reset:
-        # machine.reset() can wedge USB on this firmware; reboot via the watchdog
-        cmd += ["+", "exec", "import machine\nmachine.WDT(timeout=100)\nwhile True:\n pass"]
     return cmd
+
+
+def soft_reset(port=None):
+    """Ctrl-B (leave mpremote's raw REPL) + Ctrl-D: a soft reset that runs /main.py.
+    Never machine.reset() or the watchdog: warm resets can hang this board until
+    it's unplugged. Needs pyserial (installed with mpremote)."""
+    try:
+        import serial
+        from serial.tools import list_ports
+    except ImportError:
+        print("pyserial missing: press Ctrl-D in a REPL to start GitMatrix")
+        return 1
+    if port is None:
+        ports = [p.device for p in list_ports.comports() if p.vid == 0x2E8A]
+        if not ports:
+            print("no widget found; press Ctrl-D in a REPL to start GitMatrix")
+            return 1
+        port = ports[0]
+    with serial.Serial(port, 115200, timeout=1) as s:
+        s.write(b"\x03\x02")
+        time.sleep(0.2)
+        s.write(b"\x04")
+        time.sleep(0.5)
+    return 0
 
 
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--port", help="serial port (default: mpremote auto-detect)")
     p.add_argument("--dry-run", action="store_true", help="print what would be copied")
-    p.add_argument("--reset", action="store_true", help="reboot (via watchdog) when done")
+    p.add_argument("--reset", action="store_true", help="soft-reset when done (starts GitMatrix)")
     args = p.parse_args(argv)
 
     files = plan()
     for src, dst in files:
         print(f"{src.relative_to(HERE)} -> {dst}")
-    cmd = commands(files, args.port, args.reset)
+    cmd = commands(files, args.port)
     if args.dry_run:
         print(f"\n{len(files)} files; would run: {' '.join(cmd[:6])} ...")
         return 0
-    return subprocess.run(cmd, check=False).returncode
+    code = subprocess.run(cmd, check=False).returncode
+    if code == 0 and args.reset:
+        code = soft_reset(args.port)
+    return code
 
 
 if __name__ == "__main__":

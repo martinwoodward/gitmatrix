@@ -45,14 +45,16 @@ def test_garbage_in_scratch_is_not_a_marker(root):
     assert _persist.boot_count() == 0
 
 
-def test_reset_uses_watchdog_never_machine_reset(root):
+def test_reset_is_a_soft_reset_with_the_watchdog_stopped(root):
     machine = sys.modules["machine"]
     machine.WDT.created.clear()
+    machine.mem32[_persist.WATCHDOG_CTRL] = _persist.WATCHDOG_ENABLE | 0x1234
     _persist.bump_boot()
     _persist.mark(_persist.marker(0, "x", "update"))
-    with pytest.raises(SystemExit):
-        _persist.reset(250)
-    assert machine.WDT.created[-1].timeout == 250
+    with pytest.raises(SystemExit, match="soft reboot"):
+        _persist.reset()
+    assert not machine.WDT.created
+    assert machine.mem32[_persist.WATCHDOG_CTRL] == 0x1234
     assert _persist.read_mark() is None and _persist.boot_count() == 0
 
 

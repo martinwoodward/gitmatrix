@@ -76,8 +76,10 @@ def boot(input_=None, bt=None, network_=None):
     _runtime.firmware = load_firmware_config()
     _runtime.reboot_at = None
 
-    real_screen = builtins.screen
-    real_display = builtins.display
+    # contribution_widget's globals live in MicroPython's builtins override dict:
+    # a bare name finds them, but builtins.screen raises AttributeError
+    real_screen = screen  # noqa: F821
+    real_display = display  # noqa: F821
     if isinstance(real_display, DisplayProxy):
         real_display = real_display._real  # noqa: SLF001 - re-running boot from the REPL
     rt.compositor = Compositor(real_screen, real_display)
@@ -230,6 +232,9 @@ async def _main(rt):
     if rt.wifi is not None and rt.wifi.net is not None:
         asyncio.create_task(_wifi(rt))
         asyncio.create_task(_store_task(rt))
+        from gitmatrix import _ntp
+
+        asyncio.create_task(_ntp.run(rt.wifi.connected))
         try:
             from gitmatrix import _mqtt
 
@@ -258,9 +263,16 @@ def run():
         print("gitmatrix: stopped, watchdog off")
     except Exception as e:  # noqa: BLE001 - a host bug: reboot; repeated failures land in safe mode
         _compat.print_exception(e)
+        boots = _persist.boot_count()
+        if boots >= BOOT_LOOP_LIMIT * 2 or (rt is None and boots >= BOOT_LOOP_LIMIT):
+            # boot() itself keeps failing, so safe mode can't help: stop at the
+            # REPL rather than soft-reset forever (a power cycle tries again)
+            _persist.disable_watchdog()
+            print(f"gitmatrix: failed {boots} boots in a row, stopped")
+            return
         try:
             with _flash.pause(resume=False):
                 _state.flush_all(force=True)
         except Exception:  # noqa: BLE001, S110 - rebooting regardless
             pass
-        _persist.reset(1000, keep_boot=True)
+        _persist.reset(keep_boot=True)

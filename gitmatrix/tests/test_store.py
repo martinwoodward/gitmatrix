@@ -472,6 +472,18 @@ def test_settings_api_never_returns_secrets(web, bt):
     assert call("POST", "/api/v1/plugins/feed/settings", {"mode": "z"}).status == 400
 
 
+def test_settings_save_calls_on_settings(web, bt):
+    make_plugin(web.root, "feed", GOOD + "import builtins\n"
+                "def on_settings():\n    builtins.ON_SETTINGS = builtins.__dict__.get('ON_SETTINGS', 0) + 1\n",
+                {"name": "Feed", "settings": SCHEMA})
+    web.rt.loader.sync_config()
+    web.rt.loader.load("feed")
+    assert call("POST", "/api/v1/plugins/feed/settings", {"mode": "b"}).status == 200
+    import builtins
+    assert builtins.ON_SETTINGS == 1
+    del builtins.ON_SETTINGS
+
+
 def test_settings_api_while_streaming(web, bt):
     make_plugin(web.root, "feed", GOOD, {"name": "Feed", "settings": SCHEMA})
     web.rt.loader.sync_config()
