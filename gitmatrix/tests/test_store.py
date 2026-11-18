@@ -583,3 +583,36 @@ def test_config_autosave_repeats_skip_flash_write(web, bt, monkeypatch):
     bt.streaming_now = True
     assert _form("POST", "/config?plugin=plain", {"peaks": "on"}).status == 409
     assert len(writes) == 3
+
+
+@pytest.mark.parametrize("loaded", [True, False])
+def test_hung_process_config_is_stopped_and_quarantined(web, monkeypatch, loaded):
+    from gitmatrix import _hang
+
+    def interrupt():
+        raise KeyboardInterrupt
+
+    import builtins
+
+    spins = []
+
+    def spin():
+        spins.append(1)
+        assert len(spins) < 100, "the hang watch never fired"
+        _hang.watch.check(web.clock.advance(_hang.CHECK_MS))
+
+    builtins.spin = spin
+    monkeypatch.setattr(_hang.watch, "interrupt", interrupt)
+    try:
+        d = make_plugin(web.root, "stuck", GOOD + "def process_config(form):\n    while True:\n        spin()\n",
+                        {"name": "Stuck"})
+        (d / "config.html").write_text("<form></form>")
+        web.rt.loader.sync_config()
+        if loaded:
+            web.rt.loader.load("stuck")
+        r = _form("POST", "/config?plugin=stuck", {"speed": "3"})
+    finally:
+        del builtins.spin
+    assert r.status == 400 and b"hung in process_config" in r.body
+    assert "hung in process_config" in web.rt.config.get("quarantined")["stuck"]
+    assert _hang.watch.started is None and _hang.watch.tripped is False

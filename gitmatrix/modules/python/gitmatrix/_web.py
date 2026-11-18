@@ -677,6 +677,32 @@ onsubmit="return confirm('Reset {name} to its default settings?')">
 </form></section>"""
 
 
+def _plugin_code(name, hook, fn, *args):
+    """Run a plugin's own code for the web UI under the hang watch, as the
+    loader runs hooks: a hang is stopped and quarantined instead of meeting
+    the hardware watchdog (a warm reset, which can hang this board)."""
+    from gitmatrix import _hang
+
+    token = _hang.watch.enter(hook)
+    try:
+        return fn(*args)
+    except KeyboardInterrupt:
+        if not _hang.watch.consume():
+            raise                           # a real Ctrl-C
+        loader = _runtime.loader
+        plugin = loader.plugins.get(name) if loader is not None else None
+        if plugin is not None:
+            loader.stop_hung(plugin, hook)
+            reason = plugin.last_error
+        else:
+            reason = f"hung in {hook} (stopped after {_hang.HANG_MS // 1000} s)"
+            if loader is not None:
+                loader.quarantine(name, reason)
+        raise RuntimeError(reason) from None
+    finally:
+        _hang.watch.leave(token)
+
+
 def _module_for(name):
     """The plugin's module: the loaded one, else a throwaway import."""
     loader = _runtime.loader
@@ -686,7 +712,7 @@ def _module_for(name):
     from gitmatrix import _loader
 
     try:
-        return _loader._import(name), True  # noqa: SLF001
+        return _plugin_code(name, "import", _loader._import, name), True  # noqa: SLF001
     except Exception as e:  # noqa: BLE001 - render without it
         _log.log(f"config: import {name} failed {_compat.error_text(e)}")
         return None, False
@@ -747,7 +773,7 @@ def _config_save(name, form, module):
     if "reset" in form:
         _compat.remove_tree(_runtime.data_dir(name) + "/config.json")
     elif module is not None and hasattr(module, "process_config"):
-        module.process_config(form)
+        _plugin_code(name, "process_config", module.process_config, form)
     else:
         from gitmatrix import _state
 
