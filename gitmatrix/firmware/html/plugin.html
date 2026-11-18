@@ -95,7 +95,7 @@ async function load() {
   if (!info) return;
   document.title = info.title + " · GitMatrix";
   $("#title").replaceChildren(info.title,
-    info.update_available ? el("span", { class: "badge update" }, "update available") : null);
+    ...(info.update_available ? [el("span", { class: "badge update" }, "update available")] : []));
   const facts = [["Name", name], ["Version", info.version || "?"],
     ["Source", info.installed ? "installed from the plugin store" : "built in"],
     ["Status", info.quarantined ? "quarantined: " + (info.reason || "") : info.enabled ? "enabled" : "disabled"]];
