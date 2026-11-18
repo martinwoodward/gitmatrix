@@ -616,7 +616,9 @@ def plugin_settings(request, name):
 # As on Art Matrix: GET renders the plugin's config.html with `plugin` (its
 # name) and `placeholder` (its module) in scope; POST passes the form to the
 # plugin's process_config(form), or saves it as /data/<name>/config.json for
-# plugin_config(). A form field "reset" deletes the saved config.
+# plugin_config(). A form field "reset" deletes the saved config. Also as on
+# Art Matrix, <form data-autosave> saves on change (/static/config.js) and a
+# "Reset to defaults" button is added for plugins without process_config.
 
 def _escape(text):
     return (str(text).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
@@ -658,8 +660,13 @@ _CONFIG_PAGE = """<!doctype html>
 <body><header class="top"><a class="brand" href="/">GitMatrix</a>
 <nav><a href="/">Home</a><a href="/discover.html">Discover</a><a href="/settings.html">Settings</a></nav></header>
 <main><p><a href="/plugin.html?name={name}">&larr; {title}</a></p>
-<section class="card config-html">{body}</section></main>
-<div id="toast" class="toast" hidden></div><script src="/static/app.js"></script></body></html>"""
+<section class="card config-html">{body}</section>{reset}</main>
+<script src="/static/app.js"></script><script src="/static/config.js"></script></body></html>"""
+
+_RESET_FORM = """<section class="card"><form method="post" action="/config?plugin={name}"
+onsubmit="return confirm('Reset {name} to its default settings?')">
+<input type="hidden" name="reset" value="1"><button type="submit" class="danger">Reset to defaults</button>
+</form></section>"""
 
 
 def _module_for(name):
@@ -721,10 +728,11 @@ def config_page(request):
     module, temporary = _module_for(name)
     try:
         body = render(template, {"plugin": name, "placeholder": module})
+        show_reset = not hasattr(module, "process_config")
     finally:
         if temporary:
             _drop_module(name)
-    return _config_html(name, body)
+    return _config_html(name, body, show_reset=show_reset)
 
 
 def _config_save(name, form, module):
@@ -735,7 +743,10 @@ def _config_save(name, form, module):
     else:
         from gitmatrix import _state
 
-        _state._write_json(_runtime.data_dir(name) + "/config.json", form)  # noqa: SLF001
+        path = _runtime.data_dir(name) + "/config.json"
+        # autosave can post the same form again: don't rewrite flash for it
+        if not _compat.exists(path) or _state._read_json(path, {}) != form:  # noqa: SLF001
+            _state._write_json(path, form)  # noqa: SLF001
 
 
 def _audio_confirm_page(name, form):
@@ -750,13 +761,14 @@ def _audio_confirm_page(name, form):
     return _config_html(name, body, 409)
 
 
-def _config_html(name, body, status=200):
+def _config_html(name, body, status=200, show_reset=False):
     title = _escape(_plugin_info(name)["title"])
     headers = {"Cache-Control": "no-store"}
     token = _token()
     if token is not None:
         headers["Set-Cookie"] = _set_cookie(token)
-    return _response(_CONFIG_PAGE.format(title=title, name=name, body=body), status, "text/html", headers)
+    return _response(_CONFIG_PAGE.format(title=title, name=name, body=body,
+                                         reset=_RESET_FORM.format(name=name) if show_reset else ""), status, "text/html", headers)
 
 
 _ROUTES.append(("/config", config_page, ["GET", "POST"]))

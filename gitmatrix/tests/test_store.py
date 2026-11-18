@@ -5,6 +5,7 @@
 import asyncio
 import json
 import os
+from pathlib import Path
 
 import pytest
 import stubs
@@ -524,3 +525,33 @@ def test_config_html_without_process_config_saves_json(web):
     assert _form("POST", "/config?plugin=plain", {"reset": "1"}).status == 303
     assert not (web.root / "data" / "plain" / "config.json").exists()
     assert _form("GET", "/config?plugin=nope", {}).status == 404
+
+
+def test_config_html_reset_button_and_autosave_script(web):
+    d = make_plugin(web.root, "plain", GOOD, {"name": "Plain"})
+    (d / "config.html").write_text("<form data-autosave></form>")
+    d = make_plugin(web.root, "own", GOOD + "def process_config(form):\n    pass\n", {"name": "Own"})
+    (d / "config.html").write_text("<form data-autosave></form>")
+    web.rt.loader.sync_config()
+    plain = _form("GET", "/config?plugin=plain", {}).body
+    assert b'src="/static/config.js"' in plain
+    assert b'name="reset" value="1"' in plain and b"Reset to defaults" in plain
+    own = _form("GET", "/config?plugin=own", {}).body
+    assert b'src="/static/config.js"' in own and b"Reset to defaults" not in own
+    js = (Path(__file__).parents[1] / "firmware" / "html" / "static" / "config.js").read_text()
+    assert "form[data-autosave]" in js and "pause_audio" in js and "SETTLE_MS" in js
+
+
+def test_config_autosave_repeats_skip_flash_write(web, bt, monkeypatch):
+    d = make_plugin(web.root, "plain", GOOD, {"name": "Plain"})
+    (d / "config.html").write_text("<form data-autosave></form>")
+    web.rt.loader.sync_config()
+    writes = []
+    real = _state._write_json
+    monkeypatch.setattr(_state, "_write_json", lambda p, v: (writes.append(v), real(p, v)))
+    for form in ({}, {}, {"peaks": "on"}, {"peaks": "on"}, {}):
+        assert _form("POST", "/config?plugin=plain", form).status == 303
+    assert writes == [{}, {"peaks": "on"}, {}]   # an empty form still saves (checkboxes off)
+    bt.streaming_now = True
+    assert _form("POST", "/config?plugin=plain", {"peaks": "on"}).status == 409
+    assert len(writes) == 3

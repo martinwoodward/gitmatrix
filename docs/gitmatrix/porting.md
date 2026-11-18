@@ -19,8 +19,8 @@ This guide lists every difference and ends with a worked example. The full API i
    and handle `on_input(event)`, or leave the knob to the runtime.
 3. **Expect Bluetooth audio, not a mic.** `mic.*` works but reads whatever is streaming to
    the speaker, and is silent when nothing is. `mic.waveform()` is all zeros.
-4. **Check `config.html`.** Add a **Save** button: GitMatrix doesn't implement Art Matrix's
-   `data-autosave` script. Add a reset button if you want one.
+4. **`config.html` works as is**, including `<form data-autosave>` and the automatic
+   "Reset to defaults" button.
 5. **Don't write files yourself.** Use `gitmatrix.state()` (or `plugin_config()` /
    `process_config()`); direct flash writes while audio streams can hang the board.
 6. **Remove what isn't there**: `sensor`, `BUTTON_*`, ambient LEDs, `/sd`, `qr_screen`.
@@ -38,7 +38,7 @@ This guide lists every difference and ends with a worked example. The full API i
 | `display.update()` | ignored inside plugins; the host owns the frame |
 | Rotation | the runtime rotates enabled plugins on a timer (`delay`) |
 | Settings | `from plugin_config import plugin_config` with the same type rules (bool = key present, tuple = `#rrggbb`, int/float coerced) |
-| Config page | `config.html` served at `/config?plugin=<name>`, `{{ plugin }}` and `{{ placeholder.X }}` (the plugin module), `process_config(form)` if defined, a `reset` field deletes the saved form, the plugin is reloaded after a save |
+| Config page | `config.html` served at `/config?plugin=<name>`, `{{ plugin }}` and `{{ placeholder.X }}` (the plugin module), `process_config(form)` if defined, a `reset` field deletes the saved form, the plugin is reloaded after a save, `<form data-autosave>` saves on change, a "Reset to defaults" button is added for plugins without `process_config` |
 | Audio analysis | `mic.level()`, `tone()`, `flux()`, `intensity()`, `active()`, `bpm()`, `phase()`, `beat()`, `kick()`, `clap()`, `spectrum()` (16 bands, 0-1, same array each call) |
 | Helpers | `clamp`, `rnd`, `frnd`, `free`, `file_exists`, `is_dir`, `UID` as builtins; `fetch.AsyncFetch` and `scrolling.Scroll` modules |
 | Imports | `import artmatrix` gives the `gitmatrix` module; `rom_font` is an alias of `font` (as on Art Matrix) |
@@ -98,18 +98,15 @@ A visualiser should draw something when `audio.streaming()` is `False`, and can 
 
 ### Settings, `config.html` and secrets
 
-`plugin_config()` and `config.html` work unchanged, with three differences:
+`plugin_config()` and `config.html` work unchanged, including `<form data-autosave>` and the
+automatic "Reset to defaults" button for plugins without `process_config`. The differences:
 
 - The saved form goes to **`/data/<name>/config.json`**, not `/lib/plugins/<name>/config.json`,
   so it survives updates. A `config.json` shipped in the plugin folder is still read as a fallback.
-- **No autosave.** Art Matrix's config page script saves `<form data-autosave>` on every
-  change; GitMatrix wraps your HTML in its own page without that script. Add
-  `<button type="submit">Save</button>` (harmless on Art Matrix).
-- **No automatic "Reset to defaults".** Art Matrix adds one for plugins without
-  `process_config`. Add your own: `<button type="submit" name="reset" value="1">Reset to defaults</button>`.
-
-If Bluetooth audio is streaming when the form is posted, GitMatrix asks before saving
-(the speaker disconnects for the write).
+- Autosave waits until changes settle (0.6 s) before posting, so dragging a slider or holding
+  an arrow key makes one flash write, and a form identical to the saved one isn't rewritten.
+- If Bluetooth audio is streaming when the form is posted, GitMatrix asks before saving
+  (the speaker disconnects for the write); autosave shows the same question as a dialog.
 
 GitMatrix also offers a **settings schema** in `package.json`: the web UI builds the form,
 values are typed and validated, `secret` fields (API tokens) are stored apart in
@@ -245,14 +242,7 @@ def update():
             screen.rectangle(x, screen.height - int(peaks[i]) - 1, BAR_W - 1, 1)
 ```
 
-```html
-<form method="post" action="/config?plugin={{ plugin }}" data-autosave>
-  <input type="color" name="colour" value="{{ '#%02x%02x%02x' % placeholder.cfg['colour'] }}">
-  <label><input type="checkbox" name="peaks" {{ "checked" if placeholder.cfg['peaks'] else "" }}> Peaks</label>
-  <button type="submit">Save</button>
-  <button type="submit" name="reset" value="1">Reset to defaults</button>
-</form>
-```
+`config.html` is unchanged.
 
 ```json
 {
@@ -275,7 +265,7 @@ What changed:
 - `BAR_W` 8 → 3 and an `X0` offset; heights already used `screen.height`.
 - An idle state for when nothing streams, and `"hold": "audio"` to stay on screen while
   music plays.
-- `config.html` gained Save and Reset buttons; `plugin_config()` is untouched and now reads
+- `config.html` and `plugin_config()` are untouched; the saved form now lives in
   `/data/bars/config.json`.
 - `mic.spectrum()` is unchanged.
 
@@ -310,6 +300,5 @@ except ImportError:          # Art Matrix
 
 Hooks Art Matrix doesn't call (`on_show`, `on_input`, …) are simply ignored there, so
 initialise in top-level code or lazily in `update()`. A settings schema isn't read by
-Art Matrix, so use `plugin_config()` and `config.html` (with a Save button, which also
-works there) for settings that must work on both. Draw relative to `screen.width` and
+Art Matrix, so use `plugin_config()` and `config.html` for settings that must work on both. Draw relative to `screen.width` and
 `screen.height` and the layout scales up.

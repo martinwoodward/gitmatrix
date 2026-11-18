@@ -116,10 +116,10 @@ name and `{{ placeholder.X }}` is attribute `X` of the plugin module. The form p
 to the same URL. With `process_config(form)` the plugin handles the form, otherwise it's
 saved to `/data/<name>/config.json` for `plugin_config()`. A `reset` field deletes it.
 
-Unlike Art Matrix, the page has no `data-autosave` script and adds no "Reset to defaults"
-button, so include them in the form yourself:
-`<button type="submit">Save</button>` and
-`<button type="submit" name="reset" value="1">Reset to defaults</button>`.
+As on Art Matrix, a `<form data-autosave>` saves on every change (no Save button needed),
+and plugins without `process_config` get a "Reset to defaults" button under the form.
+GitMatrix's autosave waits for changes to settle (0.6 s) so a slider drag makes one write,
+skips rewriting an unchanged `config.json`, and asks before saving while audio streams.
 
 ### Flash writes and Bluetooth audio
 
@@ -140,7 +140,7 @@ Installs can instead wait until playback stops.
 | `screen` | 53×7, per-plugin surface |
 | `display.update()` | no-op inside plugins; the host presents the frame |
 | `plugin_config(name, defaults)` | reads `/data/<name>/config.json` (else `/lib/plugins/<name>/config.json`), coerced to the default's type (bool = key present; tuple = `#rrggbb`) |
-| `config.html` + `process_config(form)` | served at `/config?plugin=<name>` |
+| `config.html` + `process_config(form)` | served at `/config?plugin=<name>`; `<form data-autosave>` and the automatic "Reset to defaults" button as on Art Matrix |
 | `fetch.AsyncFetch` | vendored from Art Matrix (TLS with `CERT_NONE`, as Art Matrix) |
 | `scrolling.Scroll` | `update(progress)`, `render(offset)`, `reset()`, `set_text()` |
 | `mic.level()`, `tone()`, `flux()`, `intensity()`, `active()`, `bpm()`, `phase()`, `beat()`, `kick()`, `clap()`, `spectrum()` (16 bands) | driven by the Bluetooth speaker's FFT rather than a microphone |
@@ -165,7 +165,6 @@ Installs can instead wait until playback stops.
 | Audio playback from plugins | not available (`bt_audio` has no PCM output) |
 | Art Matrix buttons (`BUTTON_*`), LEDs, light sensor | not present: use the encoder (`"input": true`) instead |
 | Larger display / `set_hold` / second surface | the display is 53×7; the host handles double buffering |
-| `config.html` `data-autosave` / automatic reset button | not provided: add a Save (and optional `reset`) button to the form |
 | `requires_internet` | shown on Discover only; the plugin rotates even when offline (Art Matrix skips it) |
 | `sensor`, `/sd`, `qr_screen`, `display.set_ambient` | not present |
 | Plugin install path | GitMatrix installs to the same `/lib/plugins/<name>/`, but writes Art Matrix plugins' `config.json` to `/data/<name>/` so it survives updates |
