@@ -246,6 +246,13 @@ def run():
         print("gitmatrix: stopped, watchdog off")
     except Exception as e:  # noqa: BLE001 - a host bug: reboot; repeated failures land in safe mode
         _compat.print_exception(e)
+        boots = _persist.boot_count()
+        if boots >= BOOT_LOOP_LIMIT * 2 or (rt is None and boots >= BOOT_LOOP_LIMIT):
+            # boot() itself keeps failing, so safe mode can't help: stop at the
+            # REPL rather than soft-reset forever (a power cycle tries again)
+            _persist.disable_watchdog()
+            print(f"gitmatrix: failed {boots} boots in a row, stopped")
+            return
         try:
             with _flash.pause(resume=False):
                 _state.flush_all(force=True)

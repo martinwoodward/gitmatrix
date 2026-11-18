@@ -1,3 +1,5 @@
+import pytest
+
 from conftest import make_plugin, set_plugins
 
 from gitmatrix import _boot, _persist
@@ -78,3 +80,16 @@ def test_shutdown_restores_real_display(rig):
     real = rt.compositor.driver
     _boot.shutdown(rt)
     assert builtins.display is real
+
+
+def test_failing_boot_soft_resets_then_stops_instead_of_looping(root, monkeypatch):
+    def broken_boot():
+        _persist.bump_boot()
+        raise AttributeError("no screen")
+
+    monkeypatch.setattr(_boot, "boot", broken_boot)
+    for _ in range(_boot.BOOT_LOOP_LIMIT - 1):
+        with pytest.raises(SystemExit, match="soft reboot"):
+            _boot.run()
+    _boot.run()  # returns to the REPL
+    assert _persist.boot_count() == _boot.BOOT_LOOP_LIMIT
