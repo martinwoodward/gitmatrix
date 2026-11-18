@@ -2,8 +2,11 @@
 
 An Art Matrix-style plugin runtime for the 53×7 GitHub Contribution Widget (RP2350,
 MicroPython 1.29). It is always a Bluetooth speaker called **GitMatrix**, and a knob
-press always opens the snappy menu. See [docs/gitmatrix/plan.md](../docs/gitmatrix/plan.md)
-for the design and [docs/gitmatrix/plugin-api.md](../docs/gitmatrix/plugin-api.md) for plugins.
+press always opens the snappy menu. See [docs/gitmatrix/](../docs/gitmatrix/README.md) for
+all the docs: the [design](../docs/gitmatrix/plan.md), the
+[plugin API](../docs/gitmatrix/plugin-api.md) and
+[porting from Art Matrix](../docs/gitmatrix/porting.md). New plugins can start from
+[templates/plugin/](templates/plugin/README.md).
 
 ## Layout
 
@@ -43,6 +46,7 @@ gitmatrix/
                                    -> /lib/  Art Matrix compatibility
   tools/deploy.py                  mpremote sync of the bundle
   tools/make_sounds.py             regenerates firmware/sounds/ (procedural, no samples)
+  templates/plugin/my_plugin/      starter plugin to copy (not shipped; tested by tests/test_template.py)
   tests/                           CPython harness (stubs for the device modules)
 ```
 
@@ -58,7 +62,8 @@ python3 gitmatrix/tools/deploy.py --reset
 User data (`/config.py`, `/gitmatrix_config.py`, `/data`, `/secrets`, `/bt_link_keys.bin`)
 and store-installed plugins (`/lib/plugins/active.json`) are left alone. Stop any
 Bluetooth playback before deploying: a flash write while the speaker streams can hang the
-board.
+board. `--reset` reboots via the watchdog; warm resets can occasionally hang this board
+([phase0.md](../docs/gitmatrix/phase0.md)), so leave it off and replug instead if you prefer.
 
 ## WiFi and the web UI
 
@@ -199,5 +204,9 @@ and step frames on a fake clock.
 - Hold the knob while powering on, or crash 3 times before reaching 60 s of uptime: the
   device boots with no plugins, and the menu still works.
 - A plugin that hangs trips the 8 s watchdog. It's quarantined on the next boot.
-- Reboots always go through the watchdog (`gitmatrix.reboot()`): `machine.reset()` can
-  leave USB dead until a power cycle on this board.
+- Warm resets are avoided where possible: on this board `machine.reset()`, a watchdog
+  reset or `picotool reboot` hangs the whole chip about one time in three until it is
+  unplugged ([phase0.md](../docs/gitmatrix/phase0.md)). Settings, MQTT and plugin changes
+  apply in place. WiFi save/forget, **System → Reboot** and `deploy.py --reset` still
+  reboot via the watchdog (`gitmatrix.reboot()`, never `machine.reset()`), as does a hung
+  plugin; if the device doesn't come back within a few seconds, replug it.

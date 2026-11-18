@@ -392,8 +392,8 @@ Turning discovery off, or changing the prefix, base topic or broker, removes the
 | Call | |
 |---|---|
 | `GET wifi` | mode, ssid, ip, hostname, `audio_streaming`, etc. |
-| `POST wifi` | `{ssid, password?, hostname?}`: saves and reboots in ~1.5 s. Leaving out `password` for the same SSID keeps the stored one |
-| `POST wifi/forget` | forget the network and reboot into setup mode |
+| `POST wifi` | `{ssid, password?, hostname?}`: saves and reboots in ~1.5 s (a warm reset can occasionally hang until the board is unplugged). Leaving out `password` for the same SSID keeps the stored one |
+| `POST wifi/forget` | forget the network and reboot into setup mode (same reboot caveat) |
 | `POST wifi/scan` | `202 {"scanning": true}`; 429 + `retry_ms` within 15 s of the last scan. The display pauses while the radio scans |
 | `GET wifi/networks` | `{scanning, networks, age_ms, current}` |
 

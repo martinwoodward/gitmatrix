@@ -35,7 +35,7 @@ firmware modelled closely on [pimoroni/artmatrix](https://github.com/pimoroni/ar
 | `config.py` + `migrate_config()` + coalesced writes | Copied |
 | "Art Matrix Setup" AP + captive DNS | "GitMatrix" AP + captive DNS |
 | `mic` object | `audio` object fed from Bluetooth FFT, all `mic` method names, aliased as `mic` |
-| `rom_font`, `artmatrix` module | Aliases: `rom_font` → `font`, `contribution_widget` → `gitmatrix` |
+| `rom_font`, `artmatrix` module | Aliases: `rom_font` → `font`, `artmatrix` → `gitmatrix` |
 
 **Positioning:** plugins are **trusted, cooperative code** (as on Art Matrix), not sandboxed. One
 MicroPython interpreter means a plugin *can* import `machine`/`bt_audio` and a tight infinite loop
@@ -98,7 +98,7 @@ main.py
 - Audio (read-only): `audio.streaming()`, `connected()`, `level()`, `spectrum()` (16 bands), `bass()`, `tone()`, `flux()`, `intensity()`, `active()`, `beat()`, `kick()`, `clap()`, `bpm()`, `phase()`, `volume()` — computed once per frame from `bt_audio.fft_into()` into pre-allocated buffers, matching `mic` value ranges. `waveform()` returns a synthesised/empty buffer (documented approximate). No track metadata (bt_audio has no AVRCP).
 - Notifications: `gitmatrix.notification` (dict/None) + `on_notify(data)`.
 - Helpers: `scrolling.Scroll`, `gitmatrix.show_message(text)`. `qr_screen` not available (7 rows).
-- **Compatibility doc**: supported / aliased / unsupported Art Matrix APIs, validated by porting 4–5 representative plugins (audio-reactive, network, config page, generative).
+- **Compatibility doc**: supported / aliased / unsupported Art Matrix APIs, validated by porting 4–5 representative plugins (audio-reactive, network, config page, generative). As built: the tables in [plugin-api.md](plugin-api.md#compatibility-with-art-matrix) and the [porting guide](porting.md).
 
 ### 2.5 Settings schema (package.json)
 ```json
@@ -127,7 +127,7 @@ main.py
 - No WiFi configured → AP `GitMatrix` at 192.168.4.1 + captive DNS. AP is **WPA2** with a default password **`monalisa`** (user asked for `mona`; WPA2 requires 8–63 chars; changeable in `/gitmatrix_config.py`), shown on the display and in the menu's WiFi screen. AP turned off once STA connects. If the configured network fails for **1 min**, the AP starts as well while STA keeps retrying; it stops once STA connects.
 - Pages: Home (now showing, reorder/enable/disable, delay, Show now), Discover, Plugin settings, Notifications (test sender), Settings (brightness, volume, hostname, timezone, optional API token, alert sound on/off + quiet-hours schedule), Sounds (built-ins, upload/delete custom), WiFi (scan → pick → password → save → reboot), Bluetooth, System (usage, version, reboot, logs, plugin errors/quarantine).
 - **Scan while streaming** briefly starves A2DP → UI warns "audio may stutter" (or defer until paused).
-- **Implemented (phase 2)**: `gitmatrix._wifi` (state machine ticked every 500 ms from the asyncio loop; `WLAN.scan()` can't yield (one C call, up to 10 s, no async/per-channel form; core1 belongs to `bt_audio` so no thread), so it's isolated: setup mode scans once at boot before the event loop starts, and web rescans are explicit, rate-limited to one per 15 s (429 otherwise) and keep the watchdog fed via a soft Timer while Python tasks pause; `wifi.py` is an Art Matrix-compatible shim over it), `gitmatrix._web` (phew routes, JSON API under `/api/v1/`, static pages from `/html`, captive 302 to `/wifi.html` in AP mode), `gitmatrix._log` (RAM ring, never written to flash). Saving WiFi schedules a watchdog reboot (`gitmatrix.reboot()`), never `machine.reset()`. Discover, Plugin settings, Notifications and Sounds pages were placeholders (filled in by phases 3 and 4). Not yet done: *hold 10 s → WiFi reset* (§2.2); use Forget network in the UI, or clear `wifi_ssid` in `/config.py`.
+- **Implemented (phase 2)**: `gitmatrix._wifi` (state machine ticked every 500 ms from the asyncio loop; `WLAN.scan()` can't yield (one C call, up to 10 s, no async/per-channel form; core1 belongs to `bt_audio` so no thread), so it's isolated: setup mode scans once at boot before the event loop starts, and web rescans are explicit, rate-limited to one per 15 s (429 otherwise) and keep the watchdog fed via a soft Timer while Python tasks pause; `wifi.py` is an Art Matrix-compatible shim over it), `gitmatrix._web` (phew routes, JSON API under `/api/v1/`, static pages from `/html`, captive 302 to `/wifi.html` in AP mode), `gitmatrix._log` (RAM ring, never written to flash). Saving WiFi schedules a watchdog reboot (`gitmatrix.reboot()`), never `machine.reset()`. Phase 0 later found that any warm reset (including the watchdog) hangs this board about 1 in 3 times until it's replugged ([phase0.md](phase0.md)), so later phases apply changes in place and keep reboots to WiFi changes, System → Reboot and hung plugins. Discover, Plugin settings, Notifications and Sounds pages were placeholders (filled in by phases 3 and 4). Not yet done: *hold 10 s → WiFi reset* (§2.2); use Forget network in the UI, or clear `wifi_ssid` in `/config.py`.
 
 ### 2.8 Security (matches Art Matrix)
 - Web UI and API are **open on the LAN** by default, like Art Matrix.
@@ -187,7 +187,7 @@ Built in phase 5; full reference in [api.md](api.md), design as built in §8.
 4. **Notifications** ✅ (host-tested; on-device checks in §5.3, design as built in §7): API, queue, limits, text/PNG renderer + scroll/scale rules, plugin-forcing, sounds (silent while streaming, opt-in interrupt), custom sounds, quiet hours.
 5. **REST API v1 complete** ✅ (host-tested; on-device checks in §5.4, design as built in §8, reference in [api.md](api.md)): status, events long-poll, plugins show with data/duration, sound, brightness/volume.
 6. **Home Assistant** ✅ (host-tested; on-device checks in §5.5, design as built in §9, reference in [api.md](api.md#mqtt-and-home-assistant)): optional async MQTT client + discovery, configured on the Settings page, applied without a reboot.
-7. **Docs**: porting guide, compatibility table, plugin template, examples.
+7. **Docs** ✅: [porting guide](porting.md) with a worked example, compatibility tables in [plugin-api.md](plugin-api.md#compatibility-with-art-matrix), [plugin template](../../gitmatrix/templates/plugin/README.md) (host-tested), [docs index](README.md); stale reboot/flash notes corrected against [phase0.md](phase0.md).
 
 ## 5. Testing
 - CPython host harness with stubbed picovector/`screen` for unit tests: loader fault containment, settings schema + secret redaction, notification validation/limits/scroll rules, install reconciliation, config migration.
@@ -203,7 +203,7 @@ Built in phase 5; full reference in [api.md](api.md), design as built in §8.
 - [ ] Scan duration and the display/web stall during a web rescan (expect ~1-3 s); audio underruns while A2DP streams; same for page loads.
 - [ ] Soft `machine.Timer(-1)` callbacks run inside `WLAN.scan()`'s wait so the watchdog stays fed (try a long passive scan with a short WDT).
 - [ ] The boot pre-scan in setup mode with the AP already up: networks are listed on first page load and the AP stays up.
-- [ ] Save & reboot → watchdog reboot → joins the new network.
+- [ ] Save & reboot → watchdog reboot → joins the new network (if the display stays dark, replug: warm resets can hang, see [phase0.md](phase0.md)).
 - [ ] `bt_audio.set_pairable` exists (else the toggle only changes config).
 - [ ] Free RAM with phew loaded, and page load speed from flash.
 
@@ -284,7 +284,7 @@ Host-tested (`gitmatrix/tests/test_store.py`, `test_flash.py`); on-device checks
 
 ### 6.1 Flash writes and Bluetooth audio (phase 0 finding)
 
-A flash write while A2DP streams can hang the board (a 64 KB write hung it 2/2 runs; 1 KB ≈ 65 ms, 8 KB ≈ 170 ms, 64 KB ≈ 1 s; a rename over a file is atomic, ≈ 4 ms). Writes are fine when not streaming and after `bt_audio.deinit()`, but the Mac doesn't reconnect by itself afterwards. So: **no flash writes while `bt_audio.streaming()`**.
+A flash write while A2DP streams can hang the board (one unexplained hang during a 1/8/64 KB run, not reproduced in 10 later 64 KB writes; an earlier "2/2" was a misread, see [phase0.md](phase0.md#spike-4-flash-writes-stall-and-hang); 1 KB ≈ 65 ms, 8 KB ≈ 170 ms, 64 KB ≈ 1 s; a rename over a file is atomic, ≈ 4 ms). Writes are fine when not streaming and after `bt_audio.deinit()`, but the Mac doesn't reconnect by itself afterwards. So: **no flash writes while `bt_audio.streaming()`**.
 
 - `gitmatrix/_flash.py` is the single gate. `_compat.write_atomic`/`makedirs`/`remove_tree` call `_flash.check()`, which raises `FlashBusy` while streaming, so anything that slips past the rules fails instead of hanging.
 - **Background writes wait** (no max-defer): plugin state/settings flush, `config.py` saves (housekeeping, end of boot, `/api/v1/settings`), Bluetooth link keys, the index cache. Housekeeping writes them once playback stops.
@@ -293,7 +293,7 @@ A flash write while A2DP streams can hang the board (a 64 KB write hung it 2/2 r
   - WiFi save/forget, Bluetooth Forget, `gitmatrix.reboot()`, shutdown and the crash path pause implicitly (reboot/shutdown/crash without resuming); WiFi save/forget replies carry a `warning`.
 - `tools/deploy.py` writes files over USB: stop playback first.
 
-> **Update (later phase 0 runs)**: 9/9 further 64 KB writes while streaming were fine, so the earlier hang was partly a misread. The `_flash` deferral stays as a precaution, but phase 4 adds no new 409s.
+> **Update (later phase 0 runs)**: 10/10 further 64 KB writes while streaming were fine, so the earlier hang was partly a misread. The `_flash` deferral stays as a precaution, but phase 4 adds no new 409s.
 
 ## 7. Phase 4 (notifications) as built
 

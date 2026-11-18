@@ -2,7 +2,10 @@
 
 GitMatrix plugins follow the [Art Matrix](https://github.com/pimoroni/artmatrix) plugin
 model, so most Art Matrix plugins port with only small changes. This page covers what
-is supported, what is aliased, and what GitMatrix adds. For the design, see [plan.md](plan.md).
+is supported, what is aliased, and what GitMatrix adds. To move an existing Art Matrix
+plugin across, follow the [porting guide](porting.md); to start a new one, copy the
+[plugin template](../../gitmatrix/templates/plugin/README.md). For the design, see
+[plan.md](plan.md), and for all the docs, the [index](README.md).
 
 ## Anatomy of a plugin
 
@@ -113,6 +116,11 @@ name and `{{ placeholder.X }}` is attribute `X` of the plugin module. The form p
 to the same URL. With `process_config(form)` the plugin handles the form, otherwise it's
 saved to `/data/<name>/config.json` for `plugin_config()`. A `reset` field deletes it.
 
+Unlike Art Matrix, the page has no `data-autosave` script and adds no "Reset to defaults"
+button, so include them in the form yourself:
+`<button type="submit">Save</button>` and
+`<button type="submit" name="reset" value="1">Reset to defaults</button>`.
+
 ### Flash writes and Bluetooth audio
 
 Writing to flash while the speaker streams can hang the board, so GitMatrix never does.
@@ -157,6 +165,9 @@ Installs can instead wait until playback stops.
 | Audio playback from plugins | not available (`bt_audio` has no PCM output) |
 | Art Matrix buttons (`BUTTON_*`), LEDs, light sensor | not present: use the encoder (`"input": true`) instead |
 | Larger display / `set_hold` / second surface | the display is 53×7; the host handles double buffering |
+| `config.html` `data-autosave` / automatic reset button | not provided: add a Save (and optional `reset`) button to the form |
+| `requires_internet` | shown on Discover only; the plugin rotates even when offline (Art Matrix skips it) |
+| `sensor`, `/sd`, `qr_screen`, `display.set_ambient` | not present |
 | Plugin install path | GitMatrix installs to the same `/lib/plugins/<name>/`, but writes Art Matrix plugins' `config.json` to `/data/<name>/` so it survives updates |
 
 ## GitMatrix additions
@@ -184,7 +195,8 @@ gitmatrix.input.turns()         # input plugins: detents since the last call
 gitmatrix.input.events()        # input plugins: new events since the last call
 
 gitmatrix.show_message("Saved!")
-gitmatrix.reboot()              # saves, then reboots via the watchdog (never machine.reset())
+gitmatrix.reboot()              # saves, then reboots via the watchdog (never machine.reset());
+                                # warm resets can hang the board until replugged, so avoid it
 gitmatrix.WIDTH, gitmatrix.HEIGHT   # 53, 7
 ```
 
@@ -236,6 +248,8 @@ Plugins are trusted, cooperative code, not sandboxed. The runtime contains their
   and the next plugin shown ("<name> stopped"). Quarantine survives reboots (`config.quarantined`).
 - **Hang** (no frame for 8 s) → the hardware watchdog reboots the device. A scratch-register marker
   records which plugin and hook was running, so on the next boot that plugin is quarantined and a message is shown.
+  Warm resets occasionally hang this board until it's unplugged ([phase0.md](phase0.md)), so the watchdog is
+  a last resort: if the widget stays dark, replug it.
 - **Boot loop** (3 boots without reaching 60 s healthy uptime), or the knob **held at power-on** → safe mode:
   no plugins load, and the menu works. Choosing a plugin from the menu leaves safe mode.
 - `update()` slower than 50 ms is logged once as a warning.
