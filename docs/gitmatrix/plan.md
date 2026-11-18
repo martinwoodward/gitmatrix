@@ -175,7 +175,7 @@ main.py
 
 ## 3. Repos
 - **This repo** (`martinwoodward/ghcontrib`, to be renamed `gitmatrix` and later made public) gets the firmware mirroring artmatrix, alongside the archived original firmware: `modules/python/{gitmatrix/,phew/,fetch.py,wifi.py,plugin_config.py,scrolling.py,timezones.py}`, `firmware/{main.py,lib/,html/,defaults/,sounds/,assets/}`, `ci/`, `tools/deploy.py` (mpremote sync). First releases = **filesystem bundle on the existing 1.29 UF2**; `board/` + UF2 CI later once Pimoroni sources are available.
-- `martinwoodward/gitmatrix-plugins` (new, **public**): plugins + `ci/generate_packages.py` + manifest-check workflow.
+- [`martinwoodward/gitmatrix-plugins`](https://github.com/martinwoodward/gitmatrix-plugins) (**public**, created in phase 3): plugins + `ci/generate_packages.py` (Art Matrix's generator plus GitMatrix details and schema/thumbnail validation) + a workflow that validates on PRs and regenerates `index.json` on main. Examples: `github_contributions` (schema with a secret token), `json_feed` (url/secret/color), `matrix_rain` (Art Matrix-style `config.html`).
 - Original firmware stays in `firmware/` + `device/` as reference; new code under `gitmatrix/` (or top-level once renamed).
 
 ## 4. Phases (each gated on audio/latency measurements)
