@@ -143,3 +143,21 @@ manual power cycle. Options: (a) find a reset recipe that's 100% reliable (e.g. 
 reset oscillators via PSM WDSEL, close USB CDC first), then use it; (b) treat WDT as last resort
 and show "power cycle me" on screen in safe mode; (c) ask Pimoroni to fix warm boot in the board firmware.
 `gitmatrix/spikes/wdt_harness.py` is a ready-made, self-driving harness for (a) (not yet run).
+
+## Resume here (paused for app restart)
+
+State at pause:
+- Widget probably hung from the last 64 KB-while-streaming test and needs one replug.
+- Device FS was clean before that run. The hung write may have left `/_a.tmp`-`/_c.tmp`.
+- Mac output is "MacBook Pro Speakers".
+- After the restart, the app should have Bluetooth permission, so use `blueutil --connect 28-cd-c1-19-6a-19` instead of asking the user to reconnect.
+
+Remaining steps, in order:
+1. Replug the widget (1 replug). Remove `/_*.tmp` and any `/wifi_tmp.json`; confirm `main.py` and `/bt_link_keys.bin` are intact.
+2. Threshold test (informational only): 16 KB and 32 KB writes while streaming. Use `flash_stream.py`, adding 16k/32k steps before 64k.
+3. I2S playback while A2DP is streaming: does it glitch, hang, or mix? Record with the mic.
+4. Warm-reset harness (`gitmatrix/spikes/wdt_harness.py`), approved with a 2-replug budget and BambuStudio closed:
+   - Back up `/main.py` and install the harness as `/main.py`.
+   - Run it, then restore the stock `/main.py` (`import bt_audio_visualiser`).
+5. Final device cleanup (temp files, WiFi creds, harness state `/wdt_state.json`). Restore the Mac speakers.
+6. Add a Recommendations section here, commit, and send the final summary to the coordinator.
