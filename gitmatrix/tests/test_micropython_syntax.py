@@ -1,4 +1,4 @@
-# CPython accepts syntax that MicroPython 1.29 rejects at import time; catch it here.
+# Code CPython accepts but MicroPython 1.29 rejects (at import time, or at runtime).
 import ast
 import pathlib
 
@@ -18,6 +18,11 @@ def unsupported(tree):
         # {**a, ...}
         if isinstance(node, ast.Dict) and None in node.keys:
             yield node.lineno, "** in a dict display"
+        # contribution_widget's globals are in the builtins override dict: reading
+        # builtins.screen raises AttributeError on the device (writing is fine)
+        if (isinstance(node, ast.Attribute) and isinstance(node.ctx, ast.Load)
+                and isinstance(node.value, ast.Name) and node.value.id == "builtins"):
+            yield node.lineno, f"reads builtins.{node.attr}"
 
 
 @pytest.mark.parametrize("path", SOURCES, ids=lambda p: str(p.relative_to(ROOT)))

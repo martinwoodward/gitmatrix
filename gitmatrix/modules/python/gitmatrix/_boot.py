@@ -73,8 +73,10 @@ def boot(input_=None, bt=None, network_=None):
     _runtime.firmware = load_firmware_config()
     _runtime.reboot_at = None
 
-    real_screen = builtins.screen
-    real_display = builtins.display
+    # contribution_widget's globals live in MicroPython's builtins override dict:
+    # a bare name finds them, but builtins.screen raises AttributeError
+    real_screen = screen  # noqa: F821
+    real_display = display  # noqa: F821
     if isinstance(real_display, DisplayProxy):
         real_display = real_display._real  # noqa: SLF001 - re-running boot from the REPL
     rt.compositor = Compositor(real_screen, real_display)
