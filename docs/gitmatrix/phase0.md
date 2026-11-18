@@ -133,6 +133,16 @@ atomicity is not tested).
 - Recovery: BOOTSEL + `picotool save -a` backup; `picotool reboot` did not help; after quitting
   BambuStudio a plain replug booted normally. Reflash was **not** needed.
 
+### Recurrence after the flash-hang replug (13:36-13:44)
+- The widget had in fact recovered on its own: it was enumerated as "Board in FS mode" until the
+  user unplugged it at 13:35:15.
+- Replug at 13:36:24: the port powered on, but nothing enumerated and the kernel logged no
+  enumeration errors for about 7 minutes.
+- The user replugged again at about 13:43. It enumerated at 13:44:25 (stock files intact,
+  no temp files). This was not counted against the harness budget.
+- So cold boot occasionally fails to bring up USB with no host-side error. This happened with
+  BambuStudio closed, so Bambu isn't the whole explanation.
+
 ### Device changes before it stopped booting (complete list)
 1. Copied `/scratch_regs.py` (1 KB) to the device FS.
 2. Wrote watchdog SCRATCH0-3,5-7, POWMAN SCRATCH0-7 and `mem_backup()[0..1]` (RAM-only registers; a power cycle clears them, verified).
