@@ -27,8 +27,9 @@ gitmatrix/
       _store     plugin store: index cache, transactional install/update/remove, boot reconcile
       _flash     the single flash writer: no writes while Bluetooth audio streams
       _config    /config.py load / migrate / save-in-place
-      _persist   crash marker + boot counter (machine.mem_backup()[0..1]), watchdog reboot
+      _persist   crash marker + boot counter (machine.mem_backup()[0..1]), soft-reset reboot
       _wifi      STA / setup AP / fallback AP state machine, mDNS name, scans, captive DNS
+      _ntp       sets the RTC from NTP while online (non-blocking UDP)
       _web       phew routes: JSON API under /api/v1, token auth, static pages, captive redirect
       _log       in-RAM log ring (shown on the System page; never written to flash)
       glow       shared drawing helpers for built-in plugins
@@ -125,5 +126,6 @@ and step frames on a fake clock.
 - Hold the knob while powering on, or crash 3 times before reaching 60 s of uptime: the
   device boots with no plugins, and the menu still works.
 - A plugin that hangs trips the 8 s watchdog. It's quarantined on the next boot.
-- Reboots always go through the watchdog (`gitmatrix.reboot()`): `machine.reset()` can
-  leave USB dead until a power cycle on this board.
+- Reboots are soft resets (`gitmatrix.reboot()` stops the watchdog, then calls
+  `machine.soft_reset()`): warm resets (`machine.reset()`, the watchdog) can hang the
+  whole chip until a power cycle on this board. See `docs/gitmatrix/ondevice.md`.
