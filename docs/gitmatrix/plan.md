@@ -167,10 +167,11 @@ main.py
 - **Alert sound control**: `Sound on/off` and **quiet hours** (start/end time, days) in web UI + device `Alerts` menu + API/MQTT. When muted, notifications still show but play no sound; a user option **"High priority bypasses quiet hours"** (web UI + API/MQTT, default off) lets `priority: high` notifications still play sound.
 
 ### 2.11 REST API v1 (Home Assistant & scripts)
-- `GET /api/v1/status` — plugin, mode, wifi, bt (connected/streaming), volume, brightness, encoder (position, last event seq), uptime, firmware, mem/flash.
-- `GET /api/v1/plugins`; `POST /api/v1/plugins/{name}/show` `{data, duration}`; `POST /api/v1/plugins/next|prev`; `POST /api/v1/plugins/{name}/enable|disable`; `GET/POST /api/v1/plugins/{name}/settings` (secrets write-only).
-- `GET/POST /api/v1/brightness`, `/api/v1/volume`; `POST /api/v1/sound`; `POST/DELETE /api/v1/notify`.
-- `GET /api/v1/events?since=<seq>` long-poll for encoder/button/plugin/notification events.
+Built in phase 5; full reference in [api.md](api.md), design as built in §8.
+- `GET /api/v1/status` — plugin, mode, wifi, bt (connected/streaming), volume, brightness, encoder (position, last event seq), uptime, firmware, mem/flash, notifications.
+- `GET /api/v1/plugins`; `POST /api/v1/plugins/{name}/show` (no body = switch; `{data, duration}` = temporary, through the notification path); `POST /api/v1/plugins/next|prev`; `POST /api/v1/plugins/{name}/enable|disable`; `GET/POST /api/v1/plugins/{name}/settings` (secrets write-only).
+- `GET/POST /api/v1/brightness`, `/api/v1/volume`; `POST/DELETE /api/v1/sound` (alert policy, `force`); `POST/DELETE /api/v1/notify`.
+- `GET /api/v1/events?since=<seq>&timeout=<s>&types=` long-poll for encoder/plugin/mode/notification/bluetooth/wifi/brightness/volume events.
 - Phase 6: **async** MQTT client (e.g. `mqtt_as`-style, not blocking `umqtt.simple`) with HA discovery: `light`, `number` (volume), `select` (plugin), `sensor` (encoder), `event` (button/rotation), `notify`, `button` (next/prev), `binary_sensor` (streaming).
 
 ## 3. Repos
@@ -184,7 +185,7 @@ main.py
 2. **Networking + security** ✅ (host-tested; on-device checks below): wifi, AP provisioning + captive portal, scan/save/reboot, mDNS, WPA2 setup AP + fallback AP, optional API token, web UI skeleton.
 3. **Plugin store** ✅ (host-tested; on-device checks in §5.2, design as built in §6): repo from `/gitmatrix_config.py`, index cache, discover/search, transactional install/update/remove, settings schema + secrets, state API, single flash writer (no writes while A2DP streams).
 4. **Notifications** ✅ (host-tested; on-device checks in §5.3, design as built in §7): API, queue, limits, text/PNG renderer + scroll/scale rules, plugin-forcing, sounds (silent while streaming, opt-in interrupt), custom sounds, quiet hours.
-5. **REST API v1 complete** (status, events, plugins, sound, brightness/volume).
+5. **REST API v1 complete** ✅ (host-tested; on-device checks in §5.4, design as built in §8, reference in [api.md](api.md)): status, events long-poll, plugins show with data/duration, sound, brightness/volume.
 6. **Home Assistant**: async MQTT + discovery.
 7. **Docs**: porting guide, compatibility table, plugin template, examples.
 
@@ -237,6 +238,20 @@ main.py
 - [ ] `image_url`/`sound_url` over HTTPS (`CERT_NONE`) prefetch before showing, without stalling the display; a 404 URL drops the note with `last_error`.
 - [ ] Flash space: `/sounds` (~160 KB) fits alongside the plugins; `os.statvfs` afterwards.
 
+### 5.4 Phase 5 on-device checklist (not yet run; host harness only)
+- [ ] `curl $GM/status`: every field filled in (`memory`, `flash` from `gc`/`os.statvfs`, `encoder`, `events`).
+- [ ] Knob turns, presses and long presses appear in `/events` while the menu and plugins still react to them as normal.
+- [ ] A waiting long-poll returns within ~50-100 ms of a knob turn; the frame rate doesn't change with 2 polls open.
+- [ ] A 3rd concurrent long-poll gets 429; a client that disconnects mid-poll frees its slot by its timeout, and phew doesn't log errors for the dead socket.
+- [ ] Bluetooth streaming with 2 long-polls open for 10 minutes: no extra underruns (`audio_pauses`), no stalls.
+- [ ] Other page loads and API calls stay responsive while 2 long-polls wait (phew serves each connection as its own task).
+- [ ] `POST /sound` across: alert sound off (`off`, `force` plays), quiet hours (`quiet`, `force` plays), streaming (`streaming`, `force` stays silent), high + interrupt (`interrupt`), a second sound while one plays (`busy`), a `sound_url`.
+- [ ] `POST /plugins/<name>/show` with `{"duration": 10, "data": {...}}` shows it, then the previous plugin comes back; without a body it stays.
+- [ ] Bluetooth connect/disconnect, start/stop music and WiFi drop/reconnect each give one event.
+- [ ] System page Developer section: Send and Watch work, Watch stops when leaving the page.
+- [ ] `gc.mem_free()` before and after 500 long-polls (no leak).
+- [ ] With an API token set, every `/api/v1/*` route gives 401 without it; the pages still work.
+
 ## 6. Phase 3 (plugin store) as built
 
 Host-tested (`gitmatrix/tests/test_store.py`, `test_flash.py`); on-device checks in §5.2.
@@ -282,3 +297,17 @@ Host-tested (`gitmatrix/tests/test_notify.py`, `test_sounds.py`, `test_web.py`, 
 - **Custom sounds**: `/data/sounds/<name>.wav`; `GET /api/v1/sounds`, `GET/POST/DELETE /api/v1/sounds/{name}` (POST: raw `audio/wav` body or `{"data": base64}`; ≤ 256 KB each, 2 MB total → 413; built-in names can't be overwritten or deleted → 400), `POST /api/v1/sounds/{name}/play`. Writes go through `_flash`; while streaming an upload is held in RAM (256 KB total, else 503) and written once playback stops (202 `{"queued": true}`). No new 409s.
 - **Settings**: `alert_sound`, `quiet_hours_enabled`, `quiet_hours` (`["22:00", "07:00"]`), `quiet_days` (0 = Monday), `quiet_bypass_high`, `alert_interrupt_audio` in `/api/v1/settings` (plus read-only `quiet_now`); device menu Alerts → Sound / Quiet hrs / Urgent rings.
 - **Web UI**: Notifications page (status and queue with Dismiss/Remove, send form with text/image/colour or plugin + JSON data, sound, priority, duration, curl example, alert sound and quiet hours settings) and Sounds page (list with Play/Delete, usage, upload).
+
+## 8. Phase 5 (REST API v1) as built
+
+Host-tested (`gitmatrix/tests/test_events.py`, `test_web.py`); on-device checks in §5.4; reference in [api.md](api.md).
+
+- **Event bus** (`gitmatrix/_events.py`, `_runtime.events`): a ring of 64 events `{seq, type, t, ...}` with a monotonically increasing `seq` and a random `boot` id. `emit()` appends and calls subscribers (exceptions caught); `change(key, value)` keeps the latest value per key in `bus.state` and emits only when it changes (`previous` included). `read(since, kinds)` returns `{events, next, dropped, reset, boot}`: `dropped` counts events that left the ring after `since`, and `reset` means `since` is ahead of `seq` (the device rebooted). `wait()` is a cheap 50 ms asyncio poll on `seq`, so a long-poll never blocks the loop.
+- **Publishers**: `_host.frame()` passes every input event to `bus.input()` before the menu/plugin sees it (observed, not consumed; the knob position is kept as cumulative detents). `_host.publish()` emits `plugin` and `mode` changes each frame (only comparisons, no allocation unless something changed) and checks Bluetooth and WiFi every 0.5 s. `apply_brightness`/`apply_volume` emit `brightness`/`volume` (0-100). `_notify` emits `notification` `start` when a note is taken and `end` once when it finishes (the end comes before the next start).
+- **Phase 6 hook**: MQTT subscribes with `bus.subscribe(fn)` and publishes the retained state from `bus.state` (`plugin`, `mode`, `bluetooth`, `wifi`, `brightness`, `volume`, `notification`), with no change to the bus.
+- **Long-poll** (`GET /api/v1/events`): answers straight away with no `since`, `timeout=0` or pending events; otherwise the handler returns a phew `Deferred` and `_serve_request` awaits it, so the poll is just another asyncio task. At most 2 wait at once (429 + `retry_ms`); `timeout` is clamped to 30 s.
+- **Status**: adds `firmware`, `plugin`, `mode`, `encoder` `{position, seq, last}`, `events` `{seq, boot, pollers}`, `memory`, `flash`.
+- **Show with data/duration**: `POST /plugins/{name}/show` with `data` or `duration` (plus `priority`, `id`, `ttl`, `repeat`, sound fields) submits a plugin notification, so it reuses phase 4's forcing and restore; 202 `{id, queued, temporary}`.
+- **Sound**: `POST /api/v1/sound` runs the same `sound_policy` as notifications (`off`/`quiet`/`streaming`/`play`/`interrupt`, `busy` if a sound is playing); `force` skips `off` and quiet hours but never talks over Bluetooth audio unless the interrupt policy allows it. URLs are fetched in a background task (errors in `last_result`). `DELETE /api/v1/sound` stops it.
+- **Web UI**: System page **Developer** section: request builder (method, path, JSON body, response) and a live event watcher (long-poll loop, last 50 events, stops on `pagehide`).
+- No new reboot paths and no flash writes.

@@ -27,6 +27,7 @@ gitmatrix/
       _state     per-plugin state and typed settings (schema, secrets in /secrets)
       _store     plugin store: index cache, transactional install/update/remove, boot reconcile
       _flash     the single flash writer: no writes while Bluetooth audio streams
+      _events    event bus: ring of seq-numbered events + latest state (long-poll, MQTT later)
       _notify    notification validation, queue, quiet hours, sound policy, renderer
       _sounds    built-in/custom sounds, uploads, I2S playback
       _png       PNG size checks, fit to 7 rows, decode
@@ -76,15 +77,20 @@ board.
   anything else runs) and **Scan** in the UI pauses the display for a second or two;
   rescans are limited to one per 15 s.
 
-API (JSON, `/api/v1/`; phases 5/6 extend it):
+API (JSON, `/api/v1/`; full reference with curl examples in
+[docs/gitmatrix/api.md](../docs/gitmatrix/api.md); the System page's **Developer** section
+can send calls and watch events):
 
 | Endpoint | |
 |---|---|
-| `GET status` | plugin, wifi, bluetooth, brightness, volume, encoder, uptime |
+| `GET status` | plugin, mode, wifi, bluetooth, brightness, volume, encoder, events seq, memory, flash, notifications, uptime |
+| `GET events?since=&timeout=&types=` | long-poll for knob, plugin, mode, notification, Bluetooth, WiFi, brightness and volume events (max 2 waiting, 30 s) |
 | `GET/POST brightness`, `volume` | `{"value": 0-100}` |
 | `GET plugins`, `GET plugins/<name>` | list / one plugin |
 | `POST plugins/next`, `prev`, `order` | rotate, reorder (`{"order": [...]}`) |
-| `POST plugins/<name>/show`, `enable`, `disable`, `unquarantine` | |
+| `POST plugins/<name>/show` | switch to it; with `{data, duration}` show it for a while then go back (202) |
+| `POST plugins/<name>/enable`, `disable`, `unquarantine` | |
+| `POST/DELETE sound` | play a sound now (`{sound \| sound_url \| sound_data, priority, force}`) under the alert settings; stop it |
 | `GET/POST settings` | delay, hostname, time zone, API token (write-only), alert sound and quiet hours |
 | `GET/POST wifi`, `POST wifi/forget` | status; save `{ssid, password}` and reboot |
 | `POST wifi/scan` (202, 429 within 15 s of the last), `GET wifi/networks` | rescan, results |
