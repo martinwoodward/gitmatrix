@@ -1,0 +1,263 @@
+# GitMatrix Phase 0 spikes (final report, 2026-11-18)
+
+Status: **complete.** All five spikes, the follow-ups (16/32 KB threshold, I2S while streaming,
+64 KB re-test) and the warm-reset harness are done. The device is back to stock: `/main.py` is
+`import bt_audio_visualiser`, `/bt_link_keys.bin` is kept, and there are no temp files or WiFi creds.
+
+> The spike scripts referenced below (`gitmatrix/spikes/*`) live on the
+> `martinwoodward-gitmatrix-phase0-spikes` branch, not in the firmware tree.
+
+## Key findings / rules for the plan
+
+1. **Warm reset is unreliable and leaves the chip stuck, not just USB.** In the harness
+   (BambuStudio closed, nothing initialised, no scratch writes):
+   - plain `machine.reset()`: 3/4 OK;
+   - WDT reset: 1/2 OK.
+   After each hung reset, `main.py` never ran again until a power cycle, so the firmware is not
+   running headless. GitMatrix must avoid reboots in normal operation.
+2. **Defer flash writes while `bt_audio.streaming()` (precaution, not a proven hang).** One run
+   hung the device during its flash-write phase while streaming. That was the coexist run,
+   after STA association, HTTP/TLS and an asyncio server. **It did not reproduce:**
+   - 64 KB writes while streaming went 10/10 OK afterwards, including with a 10 ms Timer
+     polling `ring_level()` and after a WiFi scan and AP up/down;
+   - 16 KB and 32 KB writes were OK;
+   - 0 underruns in every case.
+   An earlier interim note said "2/2 hangs". That was wrong: the second run was read mid-write
+   and had in fact completed. Each 64 KB write still blocks the VM for about 1.1 s, so deferring
+   writes (or doing them after `deinit`) remains the safe default.
+3. Notification sound: `machine.I2S` + AMP_EN (GP11) works in every state.
+   - While streaming it doesn't hang or underrun, but the tone *replaces* the A2DP audio
+     (no mix).
+   - The stream stays silent for about 2.5 s after the tone, then resumes by itself.
+4. WiFi + A2DP coexist. Only the STA association itself caused underruns (73 during an ~8.7 s
+   connect). Scan, HTTP, TLS, an asyncio server and AP/STA+AP caused none.
+5. `os.rename` over an existing file is atomic enough for temp+rename saves.
+6. Crash marker: `machine.mem_backup()` survives soft and WDT resets and is cleared on power-up.
+
+> **Confounder:** BambuStudio (3D-printer slicer) was running on the Mac throughout and probes/opens
+> new serial ports. That matches the `failed to access ... in use by another program` errors and
+> was suspected of causing the "hangs". The final harness (Bambu closed) shows warm-reset hangs happen without it. After quitting it, a plain replug enumerated in 0.6 s and
+> `bt_audio.init()` + 30 s of BT running with an active REPL was fine. The early warm-reset numbers below were taken with BambuStudio running; the harness table is the authoritative one.
+
+## Spike 1: scratch registers (crash marker + boot-loop counter)
+
+Script: `gitmatrix/spikes/scratch_regs.py`.
+
+| Storage | Soft reset (Ctrl-D) | WDT timeout reset | Power cycle |
+|---|---|---|---|
+| Watchdog SCRATCH0-3, 5-7 (`0x400D800C..`) | kept | kept | **cleared** |
+| Watchdog SCRATCH4 | kept (SDK/ROM reboot magic; written by the SDK as `0x6ab73121` on WDT reset, never use) | overwritten | cleared |
+| `machine.mem_backup()` | same as watchdog SCRATCH0-3 (it's a 4-byte-wide memoryview at `0x400D800C`; `mem_backup(1)` = 3 words at `0x400D8020`, i.e. SCRATCH5-7) | kept | cleared |
+| POWMAN SCRATCH0-7 (`0x401000B0..`, write `0x5AFE<<16 \| value`, so only 16 bits each) | kept | kept | **cleared** |
+
+- `machine.reset_cause()`: 1 = power-on/soft reset, 3 = WDT/`machine.reset()`.
+- Recommendation: crash marker in `mem_backup()[0]` / `[1]` (full 32-bit) or POWMAN SCRATCH0-3 (16-bit).
+  Avoid WD SCRATCH4-7 and POWMAN BOOT0-3 (RP2350 bootrom vectored-boot inputs) and WD SCRATCH2-3
+  (bootrom params for `reboot` API). On cold boot all are zero, which matches "no crash recorded".
+
+## Spike 2: notification sound via `machine.I2S`
+
+Scripts: `gitmatrix/spikes/i2s_tone.py`, `bt_i2s_handoff.py`. 1 kHz sine, 22.05 kHz 16-bit stereo,
+`I2S(0, sck=9, ws=10, sd=8)`, AMP_EN GP11 high while playing. Measured with the Mac mic (16 kHz, mono).
+
+| Case | Result | Mic RMS (idle ~5) |
+|---|---|---|
+| 2a: `bt_audio` never initialised | plays; `I2S()` open 1 ms | ~1200 |
+| 2b: after `bt_audio.init()` (135 ms) then `deinit()` (1 ms) | plays; `init()` again afterwards 135 ms | ~650 |
+| 2d: `bt_audio` initialised, no source connected | `I2S(0)` and `I2S(1)` both open; tone plays; `underruns` 0 | ~1400 |
+| 2d: while A2DP streaming (44.1 kHz, 440 Hz test tone streamed) | `I2S(0)` opens in 1 ms, 3 s tone plays, no hang, `underruns` 0, `streaming()` stays True. **No mix:** the I2S tone *replaces* the A2DP audio, and the A2DP audio stays silent for about 2.5 s after `i2s.deinit()`, then resumes by itself (n=1) | tone ~1800, stream ~900 |
+| 2c: re-init then source reconnect | macOS did **not** reconnect by itself; the user reconnected manually (~31 s, then streaming in 0.6 s). Re-init took 135 ms normally, 1134 ms once | - |
+
+Viable approach: if not streaming, play directly via `machine.I2S` (no need to deinit `bt_audio`).
+If streaming, `deinit()` -> play -> `init()` works on the device side, but the A2DP source may not
+come back without user action (the Mac didn't; phones untested). The plan should either mix the
+chime into the A2DP path (needs firmware support) or skip/defer chimes while streaming.
+
+## Spike 3: A2DP + WiFi coexistence
+
+Scripts: `gitmatrix/spikes/coexist.py` (device) + `host_coexist.py` (Mac streams a 440 Hz WAV
+via `afplay`, hammers the device server). 44.1 kHz SBC, ring 1024 frames, `ring_level` sampled
+every 10 ms.
+
+| Phase | Duration | Underruns | Min ring level |
+|---|---|---|---|
+| idle, streaming | 8 s | 0 | 0 (ring still filling at start) |
+| STA connect (DHCP) | 9.2 s (assoc 8.7 s) | **+73** | 0 |
+| STA idle | 8 s | 0 | 512 |
+| `scan()` (4 nets) | 0.7 s | 0 | 512 |
+| HTTP GET x3 | 0.3 s (70-135 ms each) | 0 | 768 |
+| TLS GET x3 (`CERT_NONE`) | 2.0 s (~680 ms each) | 0 | 768 |
+| asyncio HTTP server, 64 requests in 10 s | 10 s | 0* | 512 |
+| AP up (STA+AP) / STA+AP idle / STA off / AP idle / AP off | 0.2-8 s | 0 | 1024 |
+| WiFi off idle | 8 s | 0 | 768 |
+
+\* `underruns()` went down by 73 in this phase, so the counter appears to reset (likely at a
+stream restart). Treat `ring_level` as the reliable signal. Without streaming: TLS fetch ~490 ms,
+HTTP ~50 ms, server 86 hits/10 s.
+
+Recommendation: connect STA before starting audio, or accept a ~1 s glitch on (re)connect.
+Everything else can run while streaming.
+
+## Spike 4: flash writes (stall and hang)
+
+Scripts: `gitmatrix/spikes/fs_spike.py`, `flash_stream.py` + `flash_host.py`.
+
+Timing without BT (5 reps each): 1 KB write avg 65 ms (max 110), 8 KB 168 ms, 64 KB 1.01 s;
+`rename` 4 ms avg (one 72 ms outlier).
+
+| bt_audio state | Writes tried | Result |
+|---|---|---|
+| not initialised | 1/8/64 KB x5 + rename | OK |
+| initialised, no source (2 runs) | 1/8/64 KB + rename | OK, 0 underruns |
+| connected, not streaming | create empty, 4 KB, 64 KB | OK (64 KB 1.02 s) |
+| **streaming** | create empty 3 ms, 256 B 4 ms, 4 KB 131 ms, rename 4 ms, 8 KB 181 ms | OK, 0 underruns |
+| **streaming** (coexist run, after STA connect/HTTP/TLS/asyncio server/AP) | 1/8/64 KB + rename | **device hung once** during this phase; exact step unknown |
+| streaming | 16 KB 305 ms, 32 KB 546 ms | OK, 0 underruns |
+| streaming | 64 KB x10: 1x in escalate run (1.06 s), 3x plain, 3x with a 10 ms `machine.Timer` calling `ring_level()`, 2x after WiFi scan + AP up/down (with 1/8 KB + rename) | **all OK**, 1.08-1.20 s each, 0 underruns |
+| streaming, then `bt_audio.deinit()` (0 ms) first | 64 KB 1.06 s, rename 3 ms, `init` 1.1 s | OK |
+
+Correction: an earlier draft reported 2/2 hangs at 64 KB. The second "hang" was a misread (the
+log was checked during the 1.06 s write, and the run had completed). The single real hang happened
+in the coexist run and was not reproduced in 10 later 64 KB writes while streaming. A cause tied to
+STA association, sockets or the asyncio server can't be ruled out (not re-tested, because the WiFi
+creds had been deleted). The 64 KB write blocks the MicroPython VM for about 1.1 s, which matters
+more for UI responsiveness than for audio.
+
+## Spike 5: LittleFS rename
+
+Writing `/_cfg.tmp`, then `os.rename('/_cfg.tmp', '/_cfg.json')` over an existing file: the new
+contents are visible, the temp file is gone, 3.4 ms. Temp+rename is fine for config saves (power-loss
+atomicity is not tested).
+
+## Warm reset is unreliable on this firmware (plan risk)
+
+| Reset method | Attempts | Came back on USB |
+|---|---|---|
+| `machine.reset()` with scratch untouched | 1 | 1 |
+| `machine.reset()` after writing WD/POWMAN scratch or `mem_backup` | 3 | **0** (needed replug) |
+| `machine.reset()` after writing then clearing `mem_backup` | 1 | **0** |
+| WDT timeout (`machine.WDT(timeout=300..1000)` + busy loop) | 4 | 3 (4th hung) |
+
+- A hang = USB never enumerates again until a physical replug. macOS logs
+  `createDevice: failed to create device (0xe00002bc)` repeatedly, then
+  `persistent enumeration failures` and stops trying on that port until a cable change.
+- `main.py` on the device is the stock `import bt_audio_visualiser`. The display shows black when
+  nothing is streaming, so "blank display" alone does not mean hung.
+- **After the last WDT hang, the device stopped cold-booting reliably too.** It still enters BOOTSEL.
+  The firmware + ROMFS regions are byte-identical to `firmware/contribution_widget-micropython-1.29-with-filesystem.uf2`
+  (checked from a full `picotool save -a` backup, kept in the session folder, not in git).
+  During button-assisted replugs MicroPython did enumerate twice ("Board in FS mode"), so cold
+  boot works sometimes.
+- Recovery: BOOTSEL + `picotool save -a` backup; `picotool reboot` did not help; after quitting
+  BambuStudio a plain replug booted normally. Reflash was **not** needed.
+
+### Recurrence after the flash-hang replug (13:36-13:44)
+- The widget had in fact recovered on its own: it was enumerated as "Board in FS mode" until the
+  user unplugged it at 13:35:15.
+- Replug at 13:36:24: the port powered on, but nothing enumerated and the kernel logged no
+  enumeration errors for about 7 minutes.
+- The user replugged again at about 13:43. It enumerated at 13:44:25 (stock files intact,
+  no temp files). This was not counted against the harness budget.
+- So cold boot occasionally fails to bring up USB with no host-side error. This happened with
+  BambuStudio closed, so Bambu isn't the whole explanation.
+
+### Device changes before it stopped booting (complete list)
+1. Copied `/scratch_regs.py` (1 KB) to the device FS.
+2. Wrote watchdog SCRATCH0-3,5-7, POWMAN SCRATCH0-7 and `mem_backup()[0..1]` (RAM-only registers; a power cycle clears them, verified).
+3. ~9 `machine.reset()` / WDT resets, 4 of which needed replugs.
+No other files were written; `main.py`, `/bt_link_keys.bin` untouched.
+
+### WDT harness results (final, BambuStudio closed)
+
+Script: `gitmatrix/spikes/wdt_harness.py`. It was installed temporarily as `/main.py` and started
+with a soft reboot, and the host kept the serial port closed. Each cycle:
+- writes `/wdt_state.json` (pending, cycle number);
+- sets `mem_backup()[0]` to a marker;
+- triggers the reset (`machine.reset()` or `machine.WDT(timeout=300)` + busy loop).
+
+On the next boot, `reset_cause()` 3 means it came back warm ("ok"). A power-on cause means it hung
+and needed a replug. The harness stopped after 2 hangs and restored the stock `/main.py` itself.
+
+| Condition | Resets | OK | Hung | Notes |
+|---|---|---|---|---|
+| R: `machine.reset()`, nothing initialised, no scratch writes | 4 | 3 | 1 (4th) | OK cycles re-enumerated USB in ~30 ms; `mem_backup` marker survived every OK cycle |
+| A: WDT timeout, nothing initialised | 2 | 1 | 1 (2nd) | stopped here (2-hang budget) |
+| B/D/C/E (BT init, BT init+deinit, WiFi STA, WDSEL) | - | - | - | not reached |
+
+Overall: **2 hangs in 6 warm resets (~33%)**, with no BT, WiFi or scratch writes and BambuStudio
+closed. So BambuStudio, CYW43 state and scratch writes are not required for the hang. Plain
+`picotool reboot` from BOOTSEL into the app also hung once (13:46).
+
+**Is it only USB, or the whole chip?** The whole chip, or at least nothing reaches `main.py`.
+- The harness doesn't need USB. If the firmware had booted headless after a hung reset, `main.py`
+  would have run, logged "ok" and kept cycling.
+- Instead, after both hangs the state file still showed `pending` with the same cycle number
+  until the replug, 6-8 minutes later. So `main.py` never ran.
+- The display is black in that state, but it's also black whenever the visualiser isn't
+  streaming, so that's not evidence either way. BT inquiry wasn't possible because BT isn't
+  started before `main.py`.
+- The hang is somewhere between the reset and `main.py`: bootrom, early MicroPython/board init,
+  PSRAM/QMI or clocks. Not yet pinned down.
+- The 13:36 cold plug that failed to enumerate may have been the same mechanism, if the
+  unplug was too short to fully drop the rails.
+
+**Recommended reboot recipe:** none is reliable. Per-condition counts are small, but no condition
+was hang-free over more than 3 consecutive resets.
+
+### Consequence for the plan (§2.3)
+Until a warm reset is proven reliable, watchdog-based recovery can leave the widget hung until a
+manual power cycle. Options: (a) find a reset recipe that's 100% reliable (e.g. deinit CYW43/BT first,
+reset oscillators via PSM WDSEL, close USB CDC first), then use it; (b) treat WDT as last resort
+and show "power cycle me" on screen in safe mode; (c) ask Pimoroni to fix warm boot in the board firmware.
+The harness (below) found no reliable recipe: even a clean `machine.reset()` hangs about 1 in 4,
+so (b) + (c) it is.
+
+## Recommendations
+
+1. **Single flash writer, gated on streaming.** Every flash write (state saves, config, WiFi
+   credentials, plugin install, link keys) goes through one writer task:
+   - not streaming: write now, using temp + `os.rename`;
+   - streaming: queue it and flush when `bt_audio.streaming()` goes false. Use a coalescing
+     queue for state (last-write-wins), and debounce saves of 5 s or more;
+   - user-initiated writes that can't wait (plugin install, WiFi save from the setup portal):
+     pause the sink (`bt_audio.deinit()` -> write -> `init()`, about 0.1-1.1 s) and show
+     "audio paused". The source may have to reconnect manually.
+   Enforce this in the runtime, not by convention. `open(..., 'w')` outside the writer should
+   be a lint/review failure.
+2. **Notification sounds.** When not streaming, play directly with `machine.I2S(0, sck=9, ws=10, sd=8)`
+   plus AMP_EN GP11. No `bt_audio` deinit is needed; open takes about 1 ms. Use the left channel
+   only, or put the same samples in both channels. While streaming, skip or defer the chime and
+   flash the display instead. Measured: an I2S tone while streaming *replaces* the music, then
+   ~2.5 s of silence before the stream resumes, with no hang. A short chime that cuts the music
+   is acceptable as an opt-in setting. Ask Pimoroni for a `bt_audio` PCM-mix/"play" API.
+3. **Crash marker / boot-loop counter.** Use `machine.mem_backup()[0]` (marker) and `[1]`
+   (counter): they're 32-bit, survive soft and WDT resets and are zero on power-up. Never touch
+   WD SCRATCH2-7 or POWMAN BOOT0-3. If a 16-bit spare is needed, POWMAN SCRATCH0-3 is an
+   alternative.
+4. **Reset policy: avoid warm reboots.** A warm reset (`machine.reset()`, WDT or `picotool
+   reboot`) hangs the chip about 1 in 3-4 times, until someone power-cycles it.
+   - Apply settings in place: WiFi changes via `WLAN.disconnect()/connect()`, plugin
+     install/enable by re-importing/reloading the plugin, and a "restart" menu item via
+     `machine.soft_reset()`. Soft reset is a VM restart, not a chip reset; it was used
+     throughout with no failures.
+   - Keep `machine.WDT` only as a last resort for real lock-ups, with a long timeout (8 s). Feed
+     it from the main loop. Accept that recovery may need a replug.
+   - Use the `mem_backup` crash marker / boot counter for safe mode. A hung warm reset never
+     reaches `main.py`, and a power cycle clears `mem_backup`. So after "WDT fired, then
+     replug" the firmware sees a clean cold boot. Persist a "last reset was a WDT" breadcrumb
+     to flash *before* arming any deliberate reset if it must be detected.
+   - No firmware update / OTA flow should depend on an automatic reboot. Ask the user to
+     unplug and replug, with that text on the display.
+5. **WiFi.** Connect STA before starting `bt_audio` where possible, or accept a short dropout
+   during association (about 70 underruns over 8 s). Scans, HTTP/TLS fetches and the
+   setup-portal AP are safe while streaming. Monitor `ring_level()`, not `underruns()`,
+   which resets.
+6. **Raise with Pimoroni:**
+   - one unexplained hang during a flash write while streaming, after WiFi use (not reproduced);
+   - warm reset (WDT/`machine.reset()`/`picotool reboot`) hangs before `main.py` in ~1 of 3-4
+     attempts on 1.29 `contribution_widget`, with nothing initialised (repro:
+     `gitmatrix/spikes/wdt_harness.py`);
+   - no PCM playback/mix API in `bt_audio`.
+7. **Dev hygiene.** Close BambuStudio (and anything else that probes serial ports) when working
+   with the widget. It caused "port in use" errors and is a suspect for the enumeration
+   failures.

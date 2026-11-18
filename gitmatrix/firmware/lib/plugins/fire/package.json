@@ -1,0 +1,6 @@
+{
+  "name": "Fire",
+  "description": "Doom-style fire, drawn straight into the framebuffer with viper code.",
+  "author": "GitMatrix",
+  "version": "1.0.0"
+}

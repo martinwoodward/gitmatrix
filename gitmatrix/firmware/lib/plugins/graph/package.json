@@ -1,0 +1,6 @@
+{
+  "name": "Contributions",
+  "description": "Your GitHub contribution graph, one column per week. Reads /contrib_data.json.",
+  "author": "GitMatrix",
+  "version": "1.0.0"
+}

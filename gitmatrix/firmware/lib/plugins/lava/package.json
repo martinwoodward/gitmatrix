@@ -1,0 +1,9 @@
+{
+  "name": "Lava lamp",
+  "description": "Warm blobs that drift and merge, like a lava lamp.",
+  "author": "GitMatrix",
+  "version": "1.0.0",
+  "settings": [
+    {"key": "hue", "label": "Colour", "type": "int", "min": 0, "max": 255, "default": 0}
+  ]
+}

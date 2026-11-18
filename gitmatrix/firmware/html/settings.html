@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Settings · GitMatrix</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<main>
+<h1>Settings</h1>
+<section>
+  <h2>Display &amp; sound</h2>
+  <label for="brightness">Brightness <span id="brightness-v"></span></label>
+  <input type="range" id="brightness" min="0" max="100">
+  <label for="volume">Volume <span id="volume-v"></span></label>
+  <input type="range" id="volume" min="0" max="100">
+</section>
+<section>
+  <h2>Device</h2>
+  <label for="hostname">Network name (http://<i>name</i>.local, the WiFi reconnects to apply it)</label>
+  <input type="text" id="hostname" maxlength="32" autocapitalize="off" spellcheck="false">
+  <label for="tz">Time zone</label>
+  <select id="tz"></select>
+  <div class="actions"><button class="primary" id="save">Save</button></div>
+</section>
+<section>
+  <h2>API token</h2>
+  <p class="muted">Optional. When set, scripts and Home Assistant must send <span class="mono">Authorization: Bearer &lt;token&gt;</span> to <span class="mono">/api/v1</span>. These pages keep working.</p>
+  <p id="token-state" class="muted"></p>
+  <label for="token">New token (blank to remove)</label>
+  <div class="row"><input class="grow" type="password" id="token" maxlength="64" autocomplete="off"><button id="save-token">Set token</button></div>
+</section>
+<section>
+  <h2>MQTT &amp; Home Assistant</h2>
+  <p class="muted">Optional. Connects to an MQTT broker (e.g. Home Assistant's Mosquitto add-on) to send notifications, play sounds, switch plugins and report the knob. Changes apply straight away, no reboot. Use the broker's IP address: <span class="mono">.local</span> names may not resolve.</p>
+  <p id="mqtt-state" class="muted"></p>
+  <label><input type="checkbox" id="mqtt-enabled"> Connect to an MQTT broker</label>
+  <label for="mqtt-host">Broker address</label>
+  <input type="text" id="mqtt-host" maxlength="64" autocapitalize="off" spellcheck="false" placeholder="192.168.1.10">
+  <label for="mqtt-port">Port (blank for the default)</label>
+  <input type="number" id="mqtt-port" min="1" max="65535">
+  <label for="mqtt-user">User name</label>
+  <input type="text" id="mqtt-user" maxlength="64" autocapitalize="off" spellcheck="false" autocomplete="off">
+  <label for="mqtt-password">Password <span id="mqtt-password-state" class="muted"></span></label>
+  <div class="row"><input class="grow" type="password" id="mqtt-password" maxlength="64" autocomplete="new-password" placeholder="unchanged"><button id="mqtt-clear-password">Clear</button></div>
+  <label><input type="checkbox" id="mqtt-tls"> TLS (encrypted; the broker's certificate is not checked)</label>
+  <label><input type="checkbox" id="mqtt-discovery"> Home Assistant discovery (adds the device and its entities automatically)</label>
+  <label for="mqtt-discovery_prefix">Discovery prefix</label>
+  <input type="text" id="mqtt-discovery_prefix" maxlength="64" autocapitalize="off" spellcheck="false" placeholder="homeassistant">
+  <label for="mqtt-base_topic">Base topic (blank for the default)</label>
+  <input type="text" id="mqtt-base_topic" maxlength="64" autocapitalize="off" spellcheck="false">
+  <div class="actions"><button class="primary" id="mqtt-save">Save MQTT</button></div>
+</section>
+</main>
+<script src="/static/app.js"></script>
+<script>
+function slider(id) {
+  const input = $("#" + id);
+  input.oninput = () => { $(`#${id}-v`).textContent = input.value + "%"; };
+  input.onchange = () => attempt(() => api("/" + id, { value: Number(input.value) }));
+}
+function render(s) {
+  for (const id of ["brightness", "volume"]) { $("#" + id).value = s[id]; $(`#${id}-v`).textContent = s[id] + "%"; }
+  $("#hostname").value = s.hostname;
+  const tz = $("#tz");
+  tz.replaceChildren(...s.time_zones.map((z) => el("option", { value: z.key, selected: z.key === s.time_zone }, z.label)));
+  $("#token-state").textContent = s.token_set ? "A token is set." : "No token: the API is open on your network.";
+}
+slider("brightness");
+slider("volume");
+$("#save").onclick = async () => {
+  const s = await attempt(() => api("/settings", { hostname: $("#hostname").value, time_zone: $("#tz").value }), "Saved");
+  if (s) { render(s); if (s.restarting_wifi) rebooting(`WiFi is reconnecting with the new name. Visit http://${s.hostname}.local in a few seconds.`, "Renaming…"); }
+};
+$("#save-token").onclick = async () => {
+  const s = await attempt(() => api("/settings", { api_token: $("#token").value }), "Token updated");
+  if (s) { $("#token").value = ""; render(s); }
+};
+const MQTT_TEXT = ["host", "port", "user", "discovery_prefix", "base_topic"];
+const MQTT_FLAGS = ["enabled", "tls", "discovery"];
+function mqttState(st) {
+  if (!st || st.state === "unavailable") return "MQTT starts once Wi-Fi is connected.";
+  if (st.connected) return `Connected to ${st.broker} as ${st.base_topic}.`;
+  let t = { disabled: "Off.", waiting: "Waiting: " + (st.reason || ""), connecting: "Connecting…", backoff: "Not connected." }[st.state] || st.state;
+  if (st.last_error) t += " Last error: " + st.last_error + ".";
+  if (st.retry_in_s != null) t += ` Retrying in ${st.retry_in_s}s.`;
+  return t;
+}
+function renderMqtt(m) {
+  for (const k of MQTT_FLAGS) $("#mqtt-" + k).checked = !!m[k];
+  for (const k of MQTT_TEXT) $("#mqtt-" + k).value = m[k] == null ? "" : m[k];
+  $("#mqtt-port").placeholder = m.default_port;
+  $("#mqtt-base_topic").placeholder = m.default_base_topic;
+  $("#mqtt-password").value = "";
+  $("#mqtt-password-state").textContent = m.password_set ? "(set)" : "(none)";
+  $("#mqtt-state").textContent = mqttState(m.status);
+}
+$("#mqtt-save").onclick = async () => {
+  const body = {};
+  for (const k of MQTT_FLAGS) body[k] = $("#mqtt-" + k).checked;
+  for (const k of MQTT_TEXT) body[k] = $("#mqtt-" + k).value.trim();
+  if ($("#mqtt-password").value) body.password = $("#mqtt-password").value;
+  const m = await attempt(() => api("/mqtt", body), "MQTT saved");
+  if (m) renderMqtt(m);
+};
+$("#mqtt-clear-password").onclick = async () => {
+  const m = await attempt(() => api("/mqtt", { password: "" }), "Password cleared");
+  if (m) renderMqtt(m);
+};
+attempt(() => api("/settings")).then((s) => s && render(s));
+attempt(() => api("/mqtt")).then((m) => m && renderMqtt(m));
+setInterval(() => api("/mqtt").then((m) => { $("#mqtt-state").textContent = mqttState(m.status); }).catch(() => {}), 5000);
+</script>
+</body>
+</html>

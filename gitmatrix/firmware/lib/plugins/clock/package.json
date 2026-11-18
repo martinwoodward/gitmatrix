@@ -1,0 +1,10 @@
+{
+  "name": "Clock",
+  "description": "A glowing clock with rolling digits.",
+  "author": "GitMatrix",
+  "version": "1.0.0",
+  "settings": [
+    {"key": "utc_offset", "label": "UTC offset (hours)", "type": "number", "min": -12, "max": 14, "default": 0},
+    {"key": "clock_24h", "label": "24 hour clock", "type": "bool", "default": true}
+  ]
+}

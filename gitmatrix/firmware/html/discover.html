@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Discover · GitMatrix</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<main>
+<h1>Discover</h1>
+<section>
+  <div class="row">
+    <input class="grow" type="search" id="q" placeholder="Search plugins" aria-label="Search plugins">
+    <select id="cat" aria-label="Category" style="width:auto"><option value="">All categories</option></select>
+    <button id="refresh">Refresh</button>
+  </div>
+  <p class="muted" id="meta"></p>
+  <div id="progress" class="hidden"><div id="progress-text"></div><progress id="progress-bar" max="1" value="0"></progress></div>
+  <p class="warn">Installing writes to flash. If Bluetooth audio is playing you'll be asked to stop it (your phone or computer then needs to reconnect) or to wait until playback stops.</p>
+</section>
+<div class="cards" id="cards"></div>
+</main>
+<script src="/static/app.js"></script>
+<script>
+let store = null;
+let polling = null;
+
+function matches(p, q, cat) {
+  if (cat && p.category !== cat) return false;
+  if (!q) return true;
+  const hay = [p.name, p.title, p.description, p.author, p.category, ...(p.tags || [])].join(" ").toLowerCase();
+  return q.toLowerCase().split(/\s+/).every((w) => hay.includes(w));
+}
+
+function state(p) {
+  if (p.builtin) return ["Built in", null];
+  if (!p.compatible) return ["Needs firmware " + p.min_firmware, null];
+  if (p.update_available) return ["Update", "update"];
+  if (p.installed) return ["Installed", null];
+  return ["Install", "install"];
+}
+
+function card(p) {
+  const img = el("img", { class: "thumb", alt: "", loading: "lazy", src: store.base_url + p.name + "/thumbnail.png",
+    onerror: () => img.classList.add("missing") });
+  const [label, action] = state(p);
+  const busy = store.install && !store.install.finished;
+  const button = el("button", { class: action ? "primary" : "", disabled: !action || busy || !store.online,
+    onclick: () => install(p) }, label);
+  const head = el("div", {}, el("strong", {}, p.title),
+    p.update_available ? el("span", { class: "badge update" }, "update") : p.installed ? el("span", { class: "badge" }, "installed") : null);
+  const facts = [p.category, p.version && "v" + p.version, p.size != null && fmtBytes(p.size), p.author && "by " + p.author]
+    .filter(Boolean).join(" · ");
+  const extra = [p.requires_internet && "needs internet", p.input && "uses the touch buttons", (p.settings || p.config) && "has settings"]
+    .filter(Boolean).join(" · ");
+  const tags = el("div", { class: "tags" }, ...(p.tags || []).map((t) => el("span", { class: "tag" }, t)));
+  const links = el("div", { class: "row" }, button,
+    p.installed ? el("a", { href: "/plugin.html?name=" + encodeURIComponent(p.name) }, "Settings") : null);
+  return el("div", { class: "card" }, img, head, el("div", { class: "grow" }, p.description),
+    el("div", { class: "muted" }, facts), extra ? el("div", { class: "muted" }, extra) : null, tags, links);
+}
+
+function render() {
+  if (!store) return;
+  const q = $("#q").value.trim();
+  const cat = $("#cat").value;
+  const cats = [...new Set(store.plugins.map((p) => p.category).filter(Boolean))].sort();
+  const sel = $("#cat");
+  if (sel.options.length - 1 !== cats.length) {
+    sel.replaceChildren(el("option", { value: "" }, "All categories"), ...cats.map((c) => el("option", { value: c }, c)));
+    sel.value = cats.includes(cat) ? cat : "";
+  }
+  const shown = store.plugins.filter((p) => matches(p, q, sel.value));
+  const cards = $("#cards");
+  cards.replaceChildren(...shown.map(card));
+  if (!shown.length) cards.append(el("p", { class: "muted" }, store.loaded ? "No plugins match." : "The plugin list hasn't loaded yet."));
+  const age = store.age_ms != null ? "updated " + fmtAge(store.age_ms) + " ago" : "not fetched yet";
+  $("#meta").textContent = `${store.plugins.length} plugins from ${store.repo} (${age}) · ${fmtBytes(store.free)} free` +
+    (store.refreshing ? " · refreshing…" : "") + (store.error ? " · last refresh failed: " + store.error : "") +
+    (store.online ? "" : " · offline: connect GitMatrix to WiFi to install");
+  showProgress(store.install);
+}
+
+function showProgress(p) {
+  const box = $("#progress");
+  if (!p) { box.classList.add("hidden"); return; }
+  box.classList.remove("hidden");
+  const what = (p.update ? "Updating " : "Installing ") + p.name;
+  const words = { downloading: "downloading", queued: "waiting for Bluetooth audio to stop", installing: "writing to flash" };
+  $("#progress-text").textContent = p.finished
+    ? (p.error ? what + " failed: " + p.error : what + ": done")
+    : what + ": " + (words[p.state] || p.state) + (p.paused_audio ? " (audio paused: reconnect your device afterwards)" : "");
+  $("#progress-text").className = p.finished && p.error ? "bad" : p.finished ? "good" : "";
+  $("#progress-bar").max = p.total || 1;
+  $("#progress-bar").value = p.finished ? p.total || 1 : p.done;
+}
+
+async function load() {
+  const d = await attempt(() => api("/store"));
+  if (d) { store = d; render(); }
+  if (d && ((d.install && !d.install.finished) || d.refreshing)) poll();
+}
+
+function poll() {
+  if (polling) return;
+  polling = setInterval(async () => {
+    const d = await attempt(() => api("/store"));
+    if (!d) return;
+    store = d;
+    render();
+    if ((!d.install || d.install.finished) && !d.refreshing) { clearInterval(polling); polling = null; }
+  }, 1000);
+}
+
+async function install(p) {
+  const r = await attempt(() => withAudio("/store/install", { name: p.name }, true));
+  if (!r) return;
+  if (r.warning) toast(r.warning);
+  store.install = r.install;
+  render();
+  poll();
+}
+
+$("#q").oninput = render;
+$("#cat").onchange = render;
+$("#refresh").onclick = async () => {
+  const r = await attempt(() => api("/store/refresh", {}));
+  if (r) { toast("Refreshing the plugin list…"); poll(); }
+};
+const q = new URLSearchParams(location.search).get("q");
+if (q) $("#q").value = q;
+load();
+</script>
+</body>
+</html>

@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WiFi · GitMatrix</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<main>
+<h1>WiFi</h1>
+<section>
+  <h2>Status</h2>
+  <dl class="facts" id="status"><dt>Mode</dt><dd>…</dd></dl>
+</section>
+<section>
+  <h2>Join a network</h2>
+  <div class="warn hidden" id="audio-warn">Bluetooth audio is playing: it may stutter for a few seconds while scanning.</div>
+  <div class="row"><button id="scan">Scan for networks</button><span class="muted" id="scan-state"></span></div>
+  <ul class="list" id="networks"></ul>
+  <form id="join">
+    <label for="ssid">Network name (SSID)</label>
+    <input type="text" id="ssid" maxlength="32" required autocapitalize="off" spellcheck="false">
+    <label for="password">Password (leave blank for an open network, or to keep the saved one)</label>
+    <input type="password" id="password" maxlength="64" autocomplete="off">
+    <label><input type="checkbox" id="show"> Show password</label>
+    <div class="actions row">
+      <button class="primary" type="submit">Save &amp; join</button>
+      <button class="danger" type="button" id="forget">Forget network</button>
+    </div>
+  </form>
+</section>
+</main>
+<script src="/static/app.js"></script>
+<script>
+const MODES = { setup: "Setup (access point)", connecting: "Connecting", fallback: "Can't connect: access point on", connected: "Connected", unavailable: "Unavailable" };
+function bars(rssi) { return rssi >= -55 ? "▂▄▆█" : rssi >= -67 ? "▂▄▆" : rssi >= -78 ? "▂▄" : "▂"; }
+function renderStatus(w) {
+  const facts = [["Mode", MODES[w.mode] || w.mode]];
+  if (w.ssid) facts.push(["Network", w.ssid]);
+  if (w.sta_status && !w.connected) facts.push(["Last status", w.sta_status]);
+  if (w.ip) facts.push(["Address", w.url]);
+  if (w.mdns) facts.push(["Name", w.mdns]);
+  if (w.ap && w.ap.on) facts.push(["Access point", `${w.ap.ssid} at http://${w.ap.ip}`]);
+  $("#status").replaceChildren(...facts.flatMap(([k, v]) => [el("dt", {}, k), el("dd", {}, v)]));
+  $("#audio-warn").classList.toggle("hidden", !w.audio_streaming);
+  if (!$("#ssid").value && w.ssid) $("#ssid").value = w.ssid;
+}
+function renderNetworks(n) {
+  $("#scan").disabled = n.scanning;
+  $("#scan-state").textContent = n.scanning ? "Scanning…" : n.age_ms != null ? `${n.networks.length} found` : "";
+  $("#networks").replaceChildren(...n.networks.map((net) => el("li", { class: net.ssid === $("#ssid").value ? "picked" : "",
+    onclick: () => { $("#ssid").value = net.ssid; $("#password").value = ""; $("#password").focus(); renderNetworks(n); } },
+    el("span", { class: "mono" }, bars(net.rssi)), el("span", { class: "grow" }, net.ssid),
+    el("span", { class: "muted" }, (net.secure ? "🔒 " : "") + (net.ssid === n.current ? "saved" : "")))));
+}
+async function poll() {
+  const n = await attempt(() => api("/wifi/networks"));
+  if (!n) return;
+  renderNetworks(n);
+  if (n.scanning) setTimeout(poll, 1000);
+}
+$("#scan").onclick = async () => {
+  const r = await attempt(() => api("/wifi/scan", {}));
+  if (r) { if (r.warning) toast(r.warning); $("#scan").disabled = true; $("#scan-state").textContent = "Scanning…"; setTimeout(poll, 1500); }
+};
+$("#show").onchange = () => { $("#password").type = $("#show").checked ? "text" : "password"; };
+$("#join").onsubmit = async (e) => {
+  e.preventDefault();
+  const body = { ssid: $("#ssid").value };
+  if ($("#password").value) body.password = $("#password").value;
+  const r = await attempt(() => api("/wifi", body));
+  if (r) rebooting(`Joining "${r.ssid}" (no reboot: plugins and the speaker keep running). Reconnect your phone or computer to that network, then visit ${r.url} (or the address scrolling on the device: press the button and choose WiFi).`, "Switching WiFi…");
+};
+$("#forget").onclick = async () => {
+  if (!confirm("Forget the saved network? GitMatrix will leave it and start its setup WiFi.")) return;
+  const r = await attempt(() => api("/wifi/forget", {}));
+  if (r) rebooting("Starting setup mode: join the 'GitMatrix' WiFi and visit http://192.168.4.1.", "Switching WiFi…");
+};
+attempt(() => api("/wifi")).then((w) => w && renderStatus(w));
+poll();
+</script>
+</body>
+</html>

@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bluetooth · GitMatrix</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<main>
+<h1>Bluetooth</h1>
+<section>
+  <h2>Speaker</h2>
+  <dl class="facts" id="facts"></dl>
+  <label id="pairable-row" hidden><input type="checkbox" id="pairable"> Pairable (let new phones find the speaker)</label>
+  <div class="actions"><button class="danger" id="forget">Forget paired devices</button></div>
+</section>
+</main>
+<script src="/static/app.js"></script>
+<script>
+function render(b) {
+  $("#facts").replaceChildren(
+    el("dt", {}, "Name"), el("dd", {}, b.name),
+    el("dt", {}, "Connected"), el("dd", {}, b.connected ? "Yes" : "No"),
+    el("dt", {}, "Playing"), el("dd", {}, b.streaming ? "Yes" : "No"));
+  $("#pairable").checked = b.pairable;
+  $("#pairable-row").hidden = !b.pairable_supported;
+}
+$("#pairable").onchange = async () => { const b = await attempt(() => api("/bluetooth/pairable", { value: $("#pairable").checked })); if (b) render(b); };
+$("#forget").onclick = async () => {
+  if (!confirm("Forget all paired phones? They will need to pair again.")) return;
+  const b = await attempt(() => api("/bluetooth/forget", {}), "Forgotten");
+  if (b) render(b);
+};
+const load = () => attempt(() => api("/bluetooth")).then((b) => b && render(b));
+load();
+setInterval(load, 5000);
+</script>
+</body>
+</html>
