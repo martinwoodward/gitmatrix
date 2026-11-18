@@ -1,8 +1,21 @@
 # GitMatrix Phase 0 spikes (interim report, 2026-11-18)
 
-Status: **spike 1 done; spikes 2-5 not started**. The device stopped enumerating during reset
-testing and has been **recovered without reflashing** (FS, `main.py`, `/bt_link_keys.bin` intact).
-Reset experiments are paused until the coordinator approves more.
+Status: spikes 1, 2 (a/b/d), 3, 5 done; **spike 4 found a hard hang**: a large flash write
+while A2DP is streaming locks the device. Warm-reset characterisation and the 2c/flash-threshold
+follow-ups are pending. Device files are back to stock (temp files and WiFi creds removed).
+
+## Key findings / rules for the plan
+
+1. **Never write flash while `bt_audio.streaming()`.** A 64 KB write hung the whole device
+   (no USB, needs a power cycle) in 2 of 2 attempts. Writes are safe after `bt_audio.deinit()`.
+   Interim rule: defer flash writes (state, config, WiFi save, plugin install) until not streaming,
+   or pause the sink (`deinit` -> write -> `init`) and accept that the source has to reconnect.
+2. Notification sound: `machine.I2S` + AMP_EN (GP11) works, including while `bt_audio` is
+   initialised but idle. While streaming it's untested.
+3. WiFi + A2DP coexist. Only the STA association itself caused underruns (73 during an ~8.7 s
+   connect). Scan, HTTP, TLS, an asyncio server and AP/STA+AP caused none.
+4. `os.rename` over an existing file is atomic enough for temp+rename saves.
+5. Crash marker: `machine.mem_backup()` survives soft and WDT resets and is cleared on power-up.
 
 > **Confounder:** BambuStudio (3D-printer slicer) was running on the Mac throughout and probes/opens
 > new serial ports. That matches the `failed to access ... in use by another program` errors and
@@ -25,6 +38,76 @@ Script: `gitmatrix/spikes/scratch_regs.py`.
 - Recommendation: crash marker in `mem_backup()[0]` / `[1]` (full 32-bit) or POWMAN SCRATCH0-3 (16-bit).
   Avoid WD SCRATCH4-7 and POWMAN BOOT0-3 (RP2350 bootrom vectored-boot inputs) and WD SCRATCH2-3
   (bootrom params for `reboot` API). On cold boot all are zero, which matches "no crash recorded".
+
+## Spike 2: notification sound via `machine.I2S`
+
+Scripts: `gitmatrix/spikes/i2s_tone.py`, `bt_i2s_handoff.py`. 1 kHz sine, 22.05 kHz 16-bit stereo,
+`I2S(0, sck=9, ws=10, sd=8)`, AMP_EN GP11 high while playing. Measured with the Mac mic (16 kHz, mono).
+
+| Case | Result | Mic RMS (idle ~5) |
+|---|---|---|
+| 2a: `bt_audio` never initialised | plays; `I2S()` open 1 ms | ~1200 |
+| 2b: after `bt_audio.init()` (135 ms) then `deinit()` (1 ms) | plays; `init()` again afterwards 135 ms | ~650 |
+| 2d: `bt_audio` initialised, no source connected | `I2S(0)` and `I2S(1)` both open; tone plays; `underruns` 0 | ~1400 |
+| 2d: while A2DP streaming | **not tested** (the streaming run hung earlier in spike 4) | - |
+| 2c: re-init then source reconnect | macOS did **not** reconnect by itself; the user reconnected manually (~31 s, then streaming in 0.6 s). Re-init took 135 ms normally, 1134 ms once | - |
+
+Viable approach: if not streaming, play directly via `machine.I2S` (no need to deinit `bt_audio`).
+If streaming, `deinit()` -> play -> `init()` works on the device side, but the A2DP source may not
+come back without user action (the Mac didn't; phones untested). The plan should either mix the
+chime into the A2DP path (needs firmware support) or skip/defer chimes while streaming.
+
+## Spike 3: A2DP + WiFi coexistence
+
+Scripts: `gitmatrix/spikes/coexist.py` (device) + `host_coexist.py` (Mac streams a 440 Hz WAV
+via `afplay`, hammers the device server). 44.1 kHz SBC, ring 1024 frames, `ring_level` sampled
+every 10 ms.
+
+| Phase | Duration | Underruns | Min ring level |
+|---|---|---|---|
+| idle, streaming | 8 s | 0 | 0 (ring still filling at start) |
+| STA connect (DHCP) | 9.2 s (assoc 8.7 s) | **+73** | 0 |
+| STA idle | 8 s | 0 | 512 |
+| `scan()` (4 nets) | 0.7 s | 0 | 512 |
+| HTTP GET x3 | 0.3 s (70-135 ms each) | 0 | 768 |
+| TLS GET x3 (`CERT_NONE`) | 2.0 s (~680 ms each) | 0 | 768 |
+| asyncio HTTP server, 64 requests in 10 s | 10 s | 0* | 512 |
+| AP up (STA+AP) / STA+AP idle / STA off / AP idle / AP off | 0.2-8 s | 0 | 1024 |
+| WiFi off idle | 8 s | 0 | 768 |
+
+\* `underruns()` went down by 73 in this phase, so the counter appears to reset (likely at a
+stream restart). Treat `ring_level` as the reliable signal. Without streaming: TLS fetch ~490 ms,
+HTTP ~50 ms, server 86 hits/10 s.
+
+Recommendation: connect STA before starting audio, or accept a ~1 s glitch on (re)connect.
+Everything else can run while streaming.
+
+## Spike 4: flash writes (stall and hang)
+
+Scripts: `gitmatrix/spikes/fs_spike.py`, `flash_stream.py` + `flash_host.py`.
+
+Timing without BT (5 reps each): 1 KB write avg 65 ms (max 110), 8 KB 168 ms, 64 KB 1.01 s;
+`rename` 4 ms avg (one 72 ms outlier).
+
+| bt_audio state | Writes tried | Result |
+|---|---|---|
+| not initialised | 1/8/64 KB x5 + rename | OK |
+| initialised, no source (2 runs) | 1/8/64 KB + rename | OK, 0 underruns |
+| connected, not streaming | create empty, 4 KB, 64 KB | OK (64 KB 1.02 s) |
+| **streaming** | create empty 3 ms, 256 B 4 ms, 4 KB 131 ms, rename 4 ms, 8 KB 181 ms | OK, 0 underruns |
+| **streaming** | **64 KB** | **device hung: no REPL, no USB; replug needed (2/2)** |
+| streaming, then `bt_audio.deinit()` (0 ms) first | 64 KB 1.06 s, rename 3 ms, `init` 1.1 s | OK |
+
+The first hang happened during a 1 KB -> 8 KB -> 64 KB sequence, the second at 64 KB after smaller
+writes succeeded. Single samples for 4-8 KB mean "small writes are safe" is **not proven**, and the
+size threshold (16/32 KB?) is unknown. Likely cause: a long flash program/erase sequence locks out
+core 1 (I2S/SBC) or XIP for too long. That's a firmware-level issue to raise with Pimoroni.
+
+## Spike 5: LittleFS rename
+
+Writing `/_cfg.tmp`, then `os.rename('/_cfg.tmp', '/_cfg.json')` over an existing file: the new
+contents are visible, the temp file is gone, 3.4 ms. Temp+rename is fine for config saves (power-loss
+atomicity is not tested).
 
 ## Warm reset is unreliable on this firmware (plan risk)
 
