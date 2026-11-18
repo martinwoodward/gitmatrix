@@ -6,7 +6,7 @@ import random
 
 from gitmatrix import _input
 from gitmatrix._compat import ticks_diff
-from gitmatrix._display import HEIGHT, WIDTH, ease_in_quart
+from gitmatrix._display import HEIGHT, WIDTH, ease_in_quart, scroll_px
 
 SNAP_THRESHOLD = 1      # turns needed to snap to the next item
 SNAP_TIMEOUT_MS = 800
@@ -14,6 +14,7 @@ SNAP_SPEED = 3.0        # how snappily the next item slides in (~0.55 s at 60 fp
 PEEK_AMOUNT = 0.45      # how far the next item peeks in (eased)
 GLOW = True
 IDLE_MS = 30000         # close the menu after this long without input
+MARQUEE_SPEED = 25      # px/s for labels too wide to fit
 FRAME_MS = 1000 / 60    # the original tuned its physics per 60 fps frame
 
 PAD_X = 10
@@ -47,7 +48,7 @@ def draw_marquee(target, text, elapsed_ms, pen=None):
         draw_text(target, text, pen=pen)
         return
     gap = 15
-    x = 1 - (max(0, elapsed_ms - 700) // 40) % (tw + gap)
+    x = 1 - scroll_px(elapsed_ms - 700, MARQUEE_SPEED) % (tw + gap)
     draw_text(target, text, x, pen)
     draw_text(target, text, x + tw + gap, pen)
 

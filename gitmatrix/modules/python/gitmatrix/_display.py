@@ -12,6 +12,20 @@ from gitmatrix import _runtime
 
 WIDTH = 53
 HEIGHT = 7
+FRAME_MS = 16  # the frame loop's period
+
+
+def ms_per_px(speed):
+    """Scroll period for `speed` px/s, rounded to whole frames so every pixel
+    shows for the same number of frames (a 2/3/2/3 frame dwell judders)."""
+    step = max(1, int(speed)) * FRAME_MS
+    return max(1, (1000 + step // 2) // step) * FRAME_MS
+
+
+def scroll_px(elapsed_ms, speed):
+    """Whole pixels scrolled after `elapsed_ms`. The half-frame offset keeps each
+    step clear of frame boundaries, so loop jitter can't move it a frame."""
+    return max(0, elapsed_ms + FRAME_MS // 2) // ms_per_px(speed)
 
 
 def ease_in_out_cubic(t):

@@ -7,6 +7,7 @@
 # with that many pixels between copies.
 
 from gitmatrix import _compat
+from gitmatrix._display import scroll_px
 
 
 class Scroll:
@@ -64,7 +65,7 @@ class Scroll:
         if progress is not None:
             moved = self.distance * progress
         else:
-            moved = _compat.ticks_diff(_compat.ticks_ms(), self.t_start) * self.speed / 1000
+            moved = scroll_px(_compat.ticks_diff(_compat.ticks_ms(), self.t_start), self.speed)
             progress = moved / self.distance
         moved %= self.distance
         self.x = -moved if isinstance(self.gap, int) else self.target.width - moved

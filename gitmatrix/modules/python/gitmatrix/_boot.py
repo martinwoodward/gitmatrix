@@ -5,7 +5,7 @@ import builtins
 import gitmatrix
 from gitmatrix import _audio, _compat, _events, _flash, _hang, _log, _notify, _persist, _runtime, _sounds, _state, _store
 from gitmatrix._config import Config, load_firmware_config
-from gitmatrix._display import Compositor, DisplayProxy
+from gitmatrix._display import FRAME_MS, Compositor, DisplayProxy
 from gitmatrix._host import Host
 from gitmatrix._input import Input, PluginInput
 from gitmatrix._loader import PluginLoader
@@ -197,6 +197,9 @@ async def _sleep_ms(ms):
 
 
 async def _draw(rt):
+    # Paced against a deadline, not "16 ms after this frame", so frames stay on a
+    # steady 16 ms grid and scrolls step evenly; after a stall it resyncs.
+    due = _compat.ticks_ms()
     while True:
         t = _compat.ticks_ms()
         try:
@@ -206,8 +209,12 @@ async def _draw(rt):
             if not _hang.watch.consume():
                 raise
         rt.watchdog.feed()
-        spent = _compat.ticks_diff(_compat.ticks_ms(), t)
-        await _sleep_ms(max(1, 16 - spent))
+        now = _compat.ticks_ms()
+        due = _compat.ticks_add(due, FRAME_MS)
+        wait = _compat.ticks_diff(due, now)
+        if wait < 1 or wait > FRAME_MS:
+            due, wait = now, 1
+        await _sleep_ms(wait)
 
 
 async def _housekeeping(rt):

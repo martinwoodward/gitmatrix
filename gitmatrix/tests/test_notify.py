@@ -231,17 +231,17 @@ def test_small_image_is_centred_still():
 def test_wide_image_scrolls_sideways():
     r, target = render(image=png(100, 7), speed=50)
     kind, ms = r.segments[0]
-    assert kind == _notify.IMG_HSCROLL and ms == (53 + 100) * 1000 // 50
+    assert kind == _notify.IMG_HSCROLL and ms == (53 + 100) * 16  # 50 px/s rounds to 1 px a frame
     r.draw(target, 0)
     assert lit_columns(target) == []                # enters from the right
-    r.draw(target, 200)
+    r.draw(target, 160)
     assert lit_columns(target) == list(range(43, 53))
 
 
 def test_tall_image_scrolls_up():
     r, target = render(image=png(53, 20), speed=10)
     kind, ms = r.segments[0]
-    assert kind == _notify.IMG_VSCROLL and ms == (7 + 20) * 100
+    assert kind == _notify.IMG_VSCROLL and ms == (7 + 20) * 96  # 10 px/s: 6 frames a pixel
     r.draw(target, 300)                              # 3 px in: rows 4-6 lit
     assert [y for y in range(7) if target.pixel(0, y) & 0xFFFFFF] == [4, 5, 6]
 
@@ -509,3 +509,22 @@ def test_sound_starts_with_the_note(rig, monkeypatch):
 
     asyncio.run(go())
     assert played and played[0][0].endswith("/sounds/ping.wav") and played[0][1] is True
+
+
+def test_scroll_steps_evenly_despite_frame_jitter():
+    import random
+
+    from gitmatrix import _display
+
+    rnd = random.Random(1)
+    for speed in (_notify.SPEED, 10, 50):
+        dwell, last, run = [], 0, 0
+        for f in range(400):
+            t = f * _display.FRAME_MS + rnd.randint(0, 6)  # late wake-ups, as on device
+            px = _display.scroll_px(t, speed)
+            assert px - last in (0, 1)
+            if px != last:
+                dwell.append(run)
+                run = 0
+            last, run = px, run + 1
+        assert len(set(dwell[1:])) == 1, (speed, dwell)  # every pixel shows for the same frames

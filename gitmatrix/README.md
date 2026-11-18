@@ -157,7 +157,7 @@ It interrupts the plugin on screen, then everything goes back to how it was. The
 | `priority` | `normal` or `high` (jumps the queue) |
 | `duration`, `repeat` | seconds on screen (default automatic, max 60); passes (max 5) |
 | `ttl`, `id` | how long it may wait in the queue (default 600 s); same `id` replaces it |
-| `color`, `font`, `speed` | `#rrggbb`, a font name, scroll pixels per second (5-100) |
+| `color`, `font`, `speed` | `#rrggbb`, a font name, scroll pixels per second (5-100; rounded so each pixel shows for whole 16 ms frames, e.g. 25 → ~21) |
 
 Limits are checked before anything is read or decoded: body ≤ 64 KB (413), queue of 8
 (429), bad fields (400). A knob press dismisses a notification; press again to open the

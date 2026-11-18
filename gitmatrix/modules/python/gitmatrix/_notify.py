@@ -10,7 +10,7 @@
 
 import binascii
 
-from gitmatrix import _compat, _events, _log, _png, _runtime, _sounds
+from gitmatrix import _compat, _display, _events, _log, _png, _runtime, _sounds
 
 QUEUE_SIZE = 8
 AGE_MS = 60000          # a normal note waiting this long ranks with a fresh high one
@@ -422,7 +422,7 @@ class Renderer:
             self.total_ms = min(MAX_DURATION_S * 1000, self.pass_ms * note.repeat)
 
     def _scroll_ms(self, pixels):
-        return pixels * 1000 // self.speed
+        return pixels * _display.ms_per_px(self.speed)
 
     def draw(self, target, elapsed):
         """Draw the frame at `elapsed` ms. Returns True once the note is done."""
@@ -437,7 +437,7 @@ class Renderer:
                 kind = seg[0]
                 break
             t -= seg[1]
-        moved = t * self.speed // 1000
+        moved = _display.scroll_px(t, self.speed)
         img = self.img
         if kind == IMG_STATIC:
             target.blit(img, vec2((WIDTH - img.width) // 2, (HEIGHT - img.height) // 2))
