@@ -13,12 +13,7 @@
 
 from gitmatrix import _compat, _flash, _log, _runtime
 
-try:
-    import micropython
-    viper = micropython.viper
-except (ImportError, AttributeError):
-    def viper(f):
-        return f
+import micropython
 
 BUILTIN = ("chime", "ping", "alert", "success", "error", "doorbell", "coin")
 BUILTIN_DIR = "/sounds"
@@ -213,7 +208,7 @@ def delete(name):
 
 # ---- playback ---------------------------------------------------------------
 
-@viper
+@micropython.viper
 def _to_stereo(src, dst, n: int, vol: int):
     # mono 16-bit -> both channels, scaled by vol/128 (only the left is audible)
     s = ptr16(src)
@@ -229,7 +224,7 @@ def _to_stereo(src, dst, n: int, vol: int):
         i += 1
 
 
-@viper
+@micropython.viper
 def _scale(src, dst, n: int, vol: int):
     # stereo 16-bit: copy, scaled by vol/128
     s = ptr16(src)

@@ -35,6 +35,13 @@ def unsupported(tree):
         if (isinstance(node, ast.Attribute) and isinstance(node.ctx, ast.Load)
                 and isinstance(node.value, ast.Name) and node.value.id == "builtins"):
             yield node.lineno, f"reads builtins.{node.attr}"
+        # the emitters are chosen at compile time from the literal @micropython.viper /
+        # .native / .asm_thumb; an alias like `viper = micropython.viper` runs as plain
+        # Python (ptr16 etc. are then NameErrors)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            for dec in node.decorator_list:
+                if isinstance(dec, ast.Name) and dec.id in ("viper", "native", "asm_thumb"):
+                    yield dec.lineno, f"@{dec.id} must be written @micropython.{dec.id}"
         if isinstance(node, ast.Attribute) and node.attr == "hexdigest":
             yield node.lineno, "hashlib hexdigest() (MicroPython only has digest())"
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr in MISSING_METHODS:
