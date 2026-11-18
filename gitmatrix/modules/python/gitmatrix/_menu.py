@@ -345,26 +345,25 @@ class Menu:
 
         return ListScreen(labels, select, start)
 
-    def _alerts_screen(self):
+    def _alerts_screen(self, start=0):
         api = self.api
+        flags = (("Sound", "alert_sound", True), ("Quiet hrs", "quiet_hours_enabled", False),
+                 ("Urgent rings", "quiet_bypass_high", False))
 
-        def label():
-            sound = "Sound on" if api.config.get("alert_sound", True) else "Sound off"
-            quiet = "Quiet hrs on" if api.config.get("quiet_hours_enabled", False) else "Quiet hrs off"
-            return sound, quiet
+        def labels():
+            return tuple(f"{text} {'on' if api.config.get(key, default) else 'off'}"
+                         for text, key, default in flags)
 
         def select(item):
-            if item.startswith("Sound"):
-                api.config.set("alert_sound", not api.config.get("alert_sound", True))
-            elif item.startswith("Quiet"):
-                api.config.set("quiet_hours_enabled", not api.config.get("quiet_hours_enabled", False))
-            else:
-                return True
-            # rebuild so the labels show the new state
-            self.stack[-1] = self._alerts_screen()
-            return False
+            for i, (text, key, default) in enumerate(flags):
+                if item.startswith(text + " "):
+                    api.config.set(key, not api.config.get(key, default))
+                    # rebuild so the labels show the new state
+                    self.stack[-1] = self._alerts_screen(i)
+                    return False
+            return True
 
-        return SnappyScreen((*label(), "< Back"), select)
+        return SnappyScreen((*labels(), "< Back"), select, start)
 
     def _bluetooth_screen(self, start=0):
         api = self.api

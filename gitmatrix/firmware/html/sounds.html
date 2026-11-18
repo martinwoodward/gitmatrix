@@ -9,8 +9,71 @@
 <body>
 <main>
 <h1>Sounds</h1>
-<section><p class="muted">Upload sounds and play them on the speaker. Coming in phase 4.</p></section>
+<section>
+  <h2>Alert sounds</h2>
+  <p class="muted">Use any of these by name in a notification: <span class="mono">{"text": "Hi", "sound": "chime"}</span>.</p>
+  <ul class="list" id="sounds"></ul>
+  <p class="muted" id="usage"></p>
+</section>
+<section>
+  <h2>Upload a sound</h2>
+  <p class="muted">16-bit PCM WAV, mono or stereo, 8–48 kHz. Short and mono at 22 kHz keeps it small. While Bluetooth audio plays, uploads are kept in memory and saved when it stops.</p>
+  <label for="name">Name (letters, digits, - and _)</label>
+  <input type="text" id="name" maxlength="32" autocapitalize="off" spellcheck="false">
+  <label for="file">WAV file</label>
+  <input type="file" id="file" accept=".wav,audio/wav">
+  <div class="actions"><button class="primary" id="upload">Upload</button></div>
+</section>
 </main>
 <script src="/static/app.js"></script>
+<script>
+let limits = {};
+
+async function refresh() {
+  const s = await attempt(() => api("/sounds"));
+  if (!s) return;
+  limits = s;
+  $("#sounds").replaceChildren(...s.sounds.map((x) => el("li", {},
+    el("span", { class: "grow" }, x.name, " ", x.builtin ? el("span", { class: "tag" }, "built-in") : null, " ", el("span", { class: "muted" }, fmtBytes(x.size))),
+    el("button", { onclick: () => play(x.name) }, "Play"),
+    x.builtin ? null : el("button", { class: "danger", onclick: () => remove(x.name) }, "Delete"))),
+  ...s.pending.map((n) => el("li", {}, el("span", { class: "grow" }, n, " ", el("span", { class: "muted" }, "waiting for Bluetooth audio to stop")))));
+  $("#usage").textContent = `Custom sounds use ${fmtBytes(s.used)} of ${fmtBytes(s.max_total)} (up to ${fmtBytes(s.max_size)} each).`;
+}
+
+async function play(name) {
+  const r = await attempt(() => api(`/sounds/${encodeURIComponent(name)}/play`, {}));
+  if (r && !r.played) toast(r.reason, true);
+}
+
+async function remove(name) {
+  if (!confirm(`Delete ${name}?`)) return;
+  await attempt(() => api(`/sounds/${encodeURIComponent(name)}`, undefined, "DELETE"), "Deleted");
+  refresh();
+}
+
+$("#file").onchange = () => {
+  const f = $("#file").files[0];
+  if (f && !$("#name").value) $("#name").value = f.name.replace(/\.wav$/i, "").replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 32);
+};
+
+$("#upload").onclick = () => attempt(async () => {
+  const f = $("#file").files[0];
+  const name = $("#name").value.trim();
+  if (!f || !name) throw new Error("Choose a WAV file and a name");
+  if (limits.max_size && f.size > limits.max_size) throw new Error(`File is larger than ${fmtBytes(limits.max_size)}`);
+  const res = await fetch("/api/v1/sounds/" + encodeURIComponent(name), {
+    method: "POST", credentials: "same-origin", headers: { "Content-Type": "audio/wav" }, body: f });
+  let data = {};
+  try { data = await res.json(); } catch (e) { /* empty */ }
+  if (!res.ok) throw new Error(data.error || res.status + " " + res.statusText);
+  toast(data.queued ? "Uploaded: saved once Bluetooth audio stops" : "Uploaded");
+  $("#file").value = "";
+  $("#name").value = "";
+  refresh();
+});
+
+refresh();
+</script>
 </body>
 </html>

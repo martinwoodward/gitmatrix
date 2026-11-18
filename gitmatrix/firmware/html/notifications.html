@@ -9,8 +9,147 @@
 <body>
 <main>
 <h1>Notifications</h1>
-<section><p class="muted">Send a message to scroll across the display (and from Home Assistant). Coming in phase 4.</p></section>
+<section>
+  <h2>Now</h2>
+  <dl class="facts" id="state"></dl>
+  <ul class="list" id="queue"></ul>
+  <div class="actions row"><button id="dismiss" class="danger">Dismiss all</button><button id="refresh">Refresh</button></div>
+</section>
+<section>
+  <h2>Send a notification</h2>
+  <label for="kind">Show</label>
+  <select id="kind">
+    <option value="text">Text (and an optional image)</option>
+    <option value="plugin">A plugin, with JSON data</option>
+  </select>
+  <div id="text-fields">
+    <label for="text">Text</label>
+    <input type="text" id="text" maxlength="500" value="Hello from the web UI">
+    <label for="image">Image (PNG, up to 32 KB; wider than 53 scrolls sideways, taller than 7 scrolls up)</label>
+    <input type="file" id="image" accept="image/png">
+    <label for="color">Text colour</label>
+    <input type="color" id="color" value="#ffffff">
+  </div>
+  <div id="plugin-fields" class="hidden">
+    <label for="plugin">Plugin (any installed one, even if disabled)</label>
+    <select id="plugin"></select>
+    <label for="data">Data (JSON, passed to the plugin as <span class="mono">gitmatrix.notification</span>)</label>
+    <input type="text" id="data" class="mono" value='{"message": "hi"}'>
+  </div>
+  <label for="sound">Sound</label>
+  <select id="sound"></select>
+  <label for="priority">Priority</label>
+  <select id="priority"><option value="normal">Normal</option><option value="high">High</option></select>
+  <label for="duration">Duration in seconds (blank: automatic)</label>
+  <input type="number" id="duration" min="1" max="60" step="1">
+  <div class="actions"><button class="primary" id="send">Send</button></div>
+  <p class="muted">From a script: <span class="mono">curl -X POST http://<span id="host"></span>/api/v1/notify -H 'Content-Type: application/json' -d '{"text": "Build passed", "sound": "success"}'</span></p>
+</section>
+<section>
+  <h2>Alert sound</h2>
+  <label><input type="checkbox" id="alert_sound"> Play notification sounds</label>
+  <label><input type="checkbox" id="quiet_hours_enabled"> Quiet hours (notifications still show, silently)</label>
+  <div class="row">
+    <label for="quiet_start">From</label><input type="time" id="quiet_start">
+    <label for="quiet_end">to</label><input type="time" id="quiet_end">
+  </div>
+  <label>On (a window past midnight belongs to the day it starts)</label>
+  <div class="row" id="days"></div>
+  <label><input type="checkbox" id="quiet_bypass_high"> High priority notifications ring during quiet hours</label>
+  <label><input type="checkbox" id="alert_interrupt_audio"> High priority sounds play over Bluetooth audio (it drops out for a moment). Off: notifications are silent while Bluetooth audio plays.</label>
+  <p class="muted" id="quiet-now"></p>
+  <div class="actions"><button class="primary" id="save-alerts">Save</button></div>
+</section>
 </main>
 <script src="/static/app.js"></script>
+<script>
+const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+const FLAGS = ["alert_sound", "quiet_hours_enabled", "quiet_bypass_high", "alert_interrupt_audio"];
+$("#host").textContent = location.host;
+$("#days").append(...DAYS.map((d, i) => el("label", {}, el("input", { type: "checkbox", value: i, class: "day" }), " " + d)));
+
+function describe(n) {
+  return (n.text || (n.plugin ? "plugin " + n.plugin : "image")) + (n.high ? " (high)" : "");
+}
+
+async function refresh() {
+  const s = await attempt(() => api("/notify"));
+  if (!s) return;
+  const facts = [["Showing", s.active ? describe(s.active) : "nothing"], ["Shown", s.shown], ["Dropped", s.dropped]];
+  if (s.last_error) facts.push(["Last error", s.last_error]);
+  $("#state").replaceChildren(...facts.flatMap(([k, v]) => [el("dt", {}, k), el("dd", {}, v)]));
+  $("#queue").replaceChildren(...s.queued.map((n) => el("li", {},
+    el("span", { class: "grow" }, describe(n)),
+    el("button", { onclick: () => attempt(() => api("/notify?id=" + encodeURIComponent(n.id), undefined, "DELETE")).then(refresh) }, "Remove"))));
+}
+
+function renderAlerts(s) {
+  for (const k of FLAGS) $("#" + k).checked = s[k];
+  $("#quiet_start").value = s.quiet_start;
+  $("#quiet_end").value = s.quiet_end;
+  for (const box of document.querySelectorAll(".day")) box.checked = s.quiet_days.includes(Number(box.value));
+  $("#quiet-now").textContent = s.quiet_now ? "Quiet hours are on right now." : "";
+}
+
+function readFile(file) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(r.result.split(",")[1]);
+    r.onerror = () => reject(r.error);
+    r.readAsDataURL(file);
+  });
+}
+
+$("#kind").onchange = () => {
+  const plugin = $("#kind").value === "plugin";
+  $("#text-fields").classList.toggle("hidden", plugin);
+  $("#plugin-fields").classList.toggle("hidden", !plugin);
+};
+
+$("#send").onclick = () => attempt(async () => {
+  const body = { priority: $("#priority").value };
+  if ($("#sound").value) body.sound = $("#sound").value;
+  if ($("#duration").value) body.duration = Number($("#duration").value);
+  if ($("#kind").value === "plugin") {
+    body.plugin = $("#plugin").value;
+    const raw = $("#data").value.trim();
+    if (raw) body.data = JSON.parse(raw);
+  } else {
+    if ($("#text").value) body.text = $("#text").value;
+    body.color = $("#color").value;
+    const file = $("#image").files[0];
+    if (file) {
+      if (file.size > 32768) throw new Error("Image is larger than 32 KB");
+      body.image = await readFile(file);
+    }
+  }
+  const out = await api("/notify", body);
+  setTimeout(refresh, 300);
+  return out;
+}, "Sent");
+
+$("#dismiss").onclick = () => attempt(() => api("/notify", undefined, "DELETE")).then(refresh);
+$("#refresh").onclick = refresh;
+
+$("#save-alerts").onclick = async () => {
+  const body = { quiet_start: $("#quiet_start").value, quiet_end: $("#quiet_end").value,
+    quiet_days: [...document.querySelectorAll(".day:checked")].map((b) => Number(b.value)) };
+  for (const k of FLAGS) body[k] = $("#" + k).checked;
+  const s = await attempt(() => api("/settings", body), "Saved");
+  if (s) renderAlerts(s);
+};
+
+attempt(() => api("/sounds")).then((s) => {
+  if (!s) return;
+  $("#sound").replaceChildren(el("option", { value: "" }, "None"), ...s.sounds.map((x) => el("option", { value: x.name }, x.name)));
+});
+attempt(() => api("/plugins")).then((p) => {
+  if (!p) return;
+  const list = p.plugins || p;
+  $("#plugin").replaceChildren(...list.filter((x) => !x.quarantined).map((x) => el("option", { value: x.name }, x.title || x.name)));
+});
+attempt(() => api("/settings")).then((s) => s && renderAlerts(s));
+refresh();
+</script>
 </body>
 </html>

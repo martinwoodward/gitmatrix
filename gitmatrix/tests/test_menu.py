@@ -125,6 +125,9 @@ def test_alerts_toggle(rig):
     choose(rig, "Sound on")
     assert rt.config.alert_sound is False
     assert "Sound off" in top(rt).snappy.items
+    choose(rig, "Urgent rings off")
+    assert rt.config.quiet_bypass_high is True
+    assert top(rt).snappy.items[top(rt).snappy.selected()] == "Urgent rings on"
 
 
 def test_bluetooth_forget(rig, bt):
