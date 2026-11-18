@@ -99,12 +99,14 @@ def test_parse_index_normalises_and_drops_bad_entries():
     out = _store.parse_index({
         "plugins": {"good": "Good", "1bad": "Bad", "no_title": "", "evil/../x": "X"},
         "details": {"good": {"description": "d" * 500, "tags": ["a", 3, "b"], "size": 10,
-                             "files": -1, "settings": True}},
+                             "files": -1, "settings": True, "preview": "0123456789ab"}},
     })
     assert list(out) == ["good"]
     g = out["good"]
     assert len(g["description"]) == 200 and g["tags"] == ["a", "b"]
     assert g["size"] == 10 and g["files"] is None and g["settings"] is True
+    assert g["preview"] == "0123456789ab"
+    assert _store.parse_index({"plugins": {"x": "X"}})["x"]["preview"] == ""
     with pytest.raises(ValueError):
         _store.parse_index({"nope": 1})
 

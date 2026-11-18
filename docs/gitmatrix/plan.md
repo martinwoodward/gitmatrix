@@ -119,7 +119,7 @@ main.py
 ### 2.6 Plugin store
 - `PLUGIN_REPO` / `PLUGIN_BRANCH` live in `/gitmatrix_config.py` on the device (edit via mpremote/Thonny). Not exposed in the web UI or API.
 - Repo layout mirrors artmatrix-plugins: `<plugin>/__init__.py`, `package.json`, optional `config.html`, `thumbnail.png` (53×7), `ci/generate_packages.py` builds `index.json` with descriptions, categories, tags, versions and sizes (Art Matrix format).
-- Discover: device serves cached `index.json`; browser does client-side search/filter; thumbnails load directly from raw.githubusercontent.com.
+- Discover: device serves cached `index.json`; browser does client-side search/filter; thumbnails (or CI-recorded `preview.gif` animations) load directly from raw.githubusercontent.com.
 - Downloads over HTTPS with `CERT_NONE`, exactly as Art Matrix (accepted risk; revisit if the repo ever goes third-party).
 - **Transactional install**: free-space check → download + verify into RAM (staged to `/.install/<name>@<hash>` if large) → swap into `/lib/plugins/<name>/` (stable path, see §6) → atomically update `/lib/plugins/active.json`. Boot reconciliation removes incomplete versions and falls back to last-known-good. User files live in `/data/<name>` not the plugin dir.
 

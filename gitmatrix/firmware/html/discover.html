@@ -41,9 +41,28 @@ function state(p) {
   return ["Install", "install"];
 }
 
+// kept across renders, so polling doesn't restart the animated previews
+const thumbs = new Map();
+
+function thumb(p) {
+  const base = store.base_url + p.name;
+  const src = p.preview ? base + "/preview.gif?v=" + encodeURIComponent(p.preview) : base + "/thumbnail.png";
+  let img = thumbs.get(p.name);
+  if (img && img.dataset.src === src) return img;
+  img = el("img", { class: p.preview ? "thumb preview" : "thumb", alt: "", loading: "lazy", src });
+  img.dataset.src = src;
+  img.onerror = () => {
+    if (img.classList.contains("preview")) {
+      img.classList.remove("preview");
+      img.src = base + "/thumbnail.png";
+    } else img.classList.add("missing");
+  };
+  thumbs.set(p.name, img);
+  return img;
+}
+
 function card(p) {
-  const img = el("img", { class: "thumb", alt: "", loading: "lazy", src: store.base_url + p.name + "/thumbnail.png",
-    onerror: () => img.classList.add("missing") });
+  const img = thumb(p);
   const [label, action] = state(p);
   const busy = store.install && !store.install.finished;
   const button = el("button", { class: action ? "primary" : "", disabled: !action || busy || !store.online,
