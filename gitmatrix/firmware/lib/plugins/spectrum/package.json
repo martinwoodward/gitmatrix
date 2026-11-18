@@ -1,0 +1,7 @@
+{
+  "name": "Spectrum",
+  "description": "A spectrum analyser for whatever is playing on the GitMatrix speaker.",
+  "author": "GitMatrix",
+  "version": "1.0.0",
+  "hold": "audio"
+}

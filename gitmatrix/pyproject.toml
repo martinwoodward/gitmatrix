@@ -1,0 +1,25 @@
+# Tooling for the GitMatrix firmware: ruff (Art Matrix's rule set) and the CPython
+# test harness. The firmware itself has no dependencies beyond the device's 1.29
+# MicroPython build.
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 200
+target-version = "py311"
+builtins = [
+    # device globals (picovector + the widget build)
+    "screen", "display", "color", "image", "vec2", "rect", "mat3", "shape", "brush", "font",
+    "vector_font", "pixel_font", "rom_font", "easing", "ptr8", "ptr16", "ptr32", "bt_audio",
+    # installed by gitmatrix.install_globals() (Art Matrix compatible)
+    "gitmatrix", "audio", "mic", "plugin_config", "free", "clamp", "rnd", "frnd", "UID",
+    "file_exists", "is_dir", "OFF", "X2", "X4",
+]
+
+[tool.ruff.lint]
+select = ["F", "Q", "W", "E", "B", "COM", "BLE", "C4", "ISC", "ICN", "PIE", "RSE", "RET", "SLF", "ARG"]
+ignore = ["B905", "E501", "E402", "COM812", "ICN001"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["SLF001", "ARG", "BLE001"]
