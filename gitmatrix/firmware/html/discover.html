@@ -18,20 +18,6 @@
   <p class="muted" id="meta"></p>
   <div id="progress" class="hidden"><div id="progress-text"></div><progress id="progress-bar" max="1" value="0"></progress></div>
 </section>
-<section>
-  <h2>Updates</h2>
-  <p id="updates-text" class="muted"></p>
-  <ul id="updates-list"></ul>
-  <div class="row">
-    <button id="check">Check for updates</button>
-    <button class="primary hidden" id="update-all">Update all</button>
-  </div>
-  <label><input type="checkbox" id="auto"> Check and install updates automatically</label>
-  <label for="auto-days">every
-    <select id="auto-days" style="width:auto">
-      <option value="1">day</option><option value="7">week</option><option value="14">2 weeks</option><option value="30">30 days</option>
-    </select></label>
-</section>
 <div class="cards" id="cards"></div>
 </main>
 <script src="/static/app.js"></script>
@@ -93,49 +79,6 @@ function render() {
     (store.refreshing ? " · refreshing…" : "") + (store.error ? " · last refresh failed: " + store.error : "") +
     (store.online ? "" : " · offline: connect GitMatrix to WiFi to install");
   showProgress(store.install);
-  renderUpdates(store.updates);
-}
-
-function fmtWhen(s) { return s < 60 ? "under a minute" : fmtAge(s * 1000); }
-
-function renderUpdates(u) {
-  if (!u) return;
-  const b = u.batch;
-  const running = b && !b.finished;
-  const busy = running || (store.install && !store.install.finished);
-  let text = u.available.length ? `${u.available.length} update${u.available.length > 1 ? "s" : ""} available.` : "All your store plugins are up to date.";
-  if (u.last_check_ago_s != null) text += " Last checked " + fmtWhen(u.last_check_ago_s) + " ago.";
-  if (running) text = b.state === "checking" ? "Checking for updates…" : "Updating " + b.plugins.length + " plugin(s)…";
-  else if (b && b.error) text += " Last check failed: " + b.error;
-  else if (b && Object.keys(b.failed).length) text += " Not updated: " + Object.entries(b.failed).map(([n, e]) => n + " (" + e + ")").join(", ");
-  $("#updates-text").textContent = text;
-  $("#updates-list").replaceChildren(...u.available.map((p) =>
-    el("li", {}, el("strong", {}, p.title), ` ${p.installed ? "v" + p.installed : "?"} → ${p.available ? "v" + p.available : "new version"}`)));
-  $("#check").disabled = busy || !store.online;
-  const all = $("#update-all");
-  all.classList.toggle("hidden", !u.available.length);
-  all.disabled = busy || !store.online;
-  all.textContent = `Update all (${u.available.length})`;
-  if (document.activeElement !== $("#auto")) $("#auto").checked = u.auto_update;
-  if (document.activeElement !== $("#auto-days")) {
-    const sel = $("#auto-days");
-    if (![...sel.options].some((o) => Number(o.value) === u.auto_update_days)) sel.append(el("option", { value: u.auto_update_days }, u.auto_update_days + " days"));
-    sel.value = String(u.auto_update_days);
-  }
-}
-
-async function batch(path, body) {
-  const r = await attempt(() => withAudio(path, body, true));
-  if (!r) return;
-  if (r.warning) toast(r.warning);
-  store.updates.batch = r.batch;
-  render();
-  poll();
-}
-
-async function saveAuto() {
-  const u = await attempt(() => api("/store/updates", { auto_update: $("#auto").checked, auto_update_days: Number($("#auto-days").value) }), "Saved");
-  if (u) { store.updates = u; render(); }
 }
 
 function showProgress(p) {
@@ -182,10 +125,6 @@ async function install(p) {
   poll();
 }
 
-$("#check").onclick = () => batch("/store/updates/check", {});
-$("#update-all").onclick = () => batch("/store/updates/apply", {});
-$("#auto").onchange = saveAuto;
-$("#auto-days").onchange = saveAuto;
 $("#q").oninput = render;
 $("#cat").onchange = render;
 $("#refresh").onclick = async () => {
