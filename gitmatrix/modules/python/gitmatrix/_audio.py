@@ -303,6 +303,25 @@ def save_link_keys(bt=None, keys_file=None):
     return False
 
 
+def pairable_supported(bt=None):
+    bt = bt if bt is not None else bt_audio
+    return bt is not None and hasattr(bt, "set_pairable")
+
+
+def set_pairable(on, bt=None):
+    """Whether new phones can find and pair with the speaker. Needs bt_audio
+    support (set_pairable); returns False when the firmware doesn't have it."""
+    bt = bt if bt is not None else bt_audio
+    if not pairable_supported(bt):
+        return False
+    try:
+        bt.set_pairable(bool(on))
+    except Exception as e:  # noqa: BLE001 - never let this stop the speaker
+        print(f"bt: set_pairable failed {_compat.error_text(e)}")
+        return False
+    return True
+
+
 def forget_devices(bt=None, keys_file=None):
     bt = bt if bt is not None else bt_audio
     keys_file = keys_file or _runtime.path(KEYS_FILE)

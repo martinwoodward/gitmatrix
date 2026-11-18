@@ -42,6 +42,7 @@ class Host:
         now = _compat.ticks_ms() if now is None else now
         self.apply_brightness()
         self.apply_volume()
+        self.apply_pairable()
         plugins = self.plugins()
         if plugins:
             self._enter(plugins[0], now)
@@ -275,14 +276,10 @@ class Host:
             self.audio.set_volume(self.config.get("volume", 64) / 127)
 
     def menu_wifi_status(self):
-        try:
-            import network
-            wlan = network.WLAN(network.STA_IF)
-            if wlan.isconnected():
-                return f"{wlan.config('ssid')} {wlan.ifconfig()[0]}"
-        except (ImportError, AttributeError, OSError, ValueError):
-            pass
-        return "WiFi setup arrives in a later update"
+        wifi = _runtime.wifi
+        if wifi is None:
+            return "WiFi unavailable"
+        return wifi.status_text()
 
     def menu_bt_status(self):
         if self.audio is None:
@@ -295,6 +292,16 @@ class Host:
 
     def menu_forget_bt(self):
         _audio.forget_devices()
+
+    def menu_get_pairable(self):
+        return bool(self.config.get("bt_pairable", True))
+
+    def menu_set_pairable(self, on):
+        self.config.set("bt_pairable", bool(on))
+        return self.apply_pairable()
+
+    def apply_pairable(self):
+        return _audio.set_pairable(self.config.get("bt_pairable", True))
 
 
 def _plugin_input():

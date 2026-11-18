@@ -138,13 +138,45 @@ def test_bluetooth_forget(rig, bt):
     assert isinstance(top(rt), _menu.MessageScreen)
 
 
-def test_wifi_placeholder(rig):
+def test_wifi_screen_shows_setup_ap_then_address(rig):
+    import stubs
+
+    rig.net = stubs.FakeNetwork()
     rt = boot_two(rig)
     rig.press()
     choose(rig, "WiFi")
-    assert isinstance(top(rt), _menu.MessageScreen)
+    screen = top(rt)
+    assert isinstance(screen, _menu.MessageScreen)
+    text = screen.text()
+    assert "'GitMatrix'" in text and "'monalisa'" in text and "http://192.168.4.1" in text
+    rig.frames(30)  # long text scrolls rather than failing to fit
     rig.press()
     assert isinstance(top(rt), _menu.SnappyScreen)
+    # once joined, the same screen shows where to point a browser (live)
+    rt.wifi.config.set("wifi_ssid", "home")
+    rt.wifi.start(rig.clock.now)
+    rig.net.sta.up = True
+    rt.wifi.tick(rig.clock.advance(500))
+    assert screen.text() == "home - visit http://192.168.1.42 or http://gitmatrix.local"
+
+
+def test_wifi_screen_without_radio(rig):
+    rt = boot_two(rig)
+    rig.press()
+    choose(rig, "WiFi")
+    assert top(rt).text() == "WiFi unavailable"
+
+
+def test_bluetooth_pairable_toggle(rig, bt):
+    rt = boot_two(rig)
+    assert bt.pairable is True
+    rig.press()
+    choose(rig, "Bluetooth")
+    choose(rig, "Pairable on")
+    assert bt.pairable is False and rt.config.get("bt_pairable") is False
+    assert top(rt).snappy.items[2] == "Pairable off"
+    choose(rig, "Pairable off")
+    assert bt.pairable is True
 
 
 def test_turn_steps_plugins_with_slide(rig):

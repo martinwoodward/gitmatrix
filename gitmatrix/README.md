@@ -11,6 +11,9 @@ for the design and [docs/gitmatrix/plugin-api.md](../docs/gitmatrix/plugin-api.m
 gitmatrix/
   firmware/main.py                 -> /main.py   (just runs gitmatrix._boot)
   firmware/defaults/config.py      -> /defaults/config.py (copied to /config.py, then migrated)
+  firmware/defaults/gitmatrix_config.py -> /defaults/  (copied once to /gitmatrix_config.py:
+                                      setup AP SSID/password, plugin repo; never in the web UI)
+  firmware/html/                   -> /html/  static web UI (pages + static/app.js, app.css)
   firmware/lib/plugins/<name>/     -> /lib/plugins/  built-in plugins
   modules/python/gitmatrix/        -> /lib/gitmatrix/  the runtime
       _boot      boot sequence, safe mode, watchdog, main loop
@@ -23,8 +26,13 @@ gitmatrix/
       _state     per-plugin state and typed settings
       _config    /config.py load / migrate / save-in-place
       _persist   crash marker + boot counter (machine.mem_backup()[0..1]), watchdog reboot
+      _wifi      STA / setup AP / fallback AP state machine, mDNS name, scans, captive DNS
+      _web       phew routes: JSON API under /api/v1, token auth, static pages, captive redirect
+      _log       in-RAM log ring (shown on the System page; never written to flash)
       glow       shared drawing helpers for built-in plugins
-  modules/python/plugin_config.py, scrolling.py   -> /lib/  Art Matrix compatibility
+  modules/python/phew/             -> /lib/phew/  vendored phew (patched for 1.29 asyncio + an existing loop)
+  modules/python/wifi.py, timezones.py, plugin_config.py, scrolling.py
+                                   -> /lib/  Art Matrix compatibility
   tools/deploy.py                  mpremote sync of the bundle
   tests/                           CPython harness (stubs for the device modules)
 ```
@@ -38,7 +46,40 @@ python3 gitmatrix/tools/deploy.py --dry-run   # what will be copied
 python3 gitmatrix/tools/deploy.py --reset
 ```
 
-User data (`/config.py`, `/data`, `/secrets`, `/bt_link_keys.bin`) is left alone.
+User data (`/config.py`, `/gitmatrix_config.py`, `/data`, `/secrets`, `/bt_link_keys.bin`)
+is left alone.
+
+## WiFi and the web UI
+
+- No network saved: the device starts a WPA2 access point **GitMatrix** (password
+  **`monalisa`**, change it in `/gitmatrix_config.py`) at `http://192.168.4.1`, with a
+  captive portal that lands on the WiFi page. Scan, pick a network, enter the password,
+  **Save & reboot**.
+- Network saved: it joins it as `gitmatrix.local` (hostname in Settings). The AP is off
+  while connected. If the network can't be reached for 1 minute the setup AP comes back
+  as well, while it keeps retrying; it goes away again once connected.
+- Knob press → **WiFi** shows the address to visit (or the AP name, password and URL).
+- The UI and API are open on the LAN, like Art Matrix. Set an **API token** in Settings
+  and `/api/v1/*` then needs `Authorization: Bearer <token>`; pages served by the device
+  set an `HttpOnly` cookie so the browser UI keeps working.
+- Scanning while a phone is streaming to the speaker can make the audio stutter.
+
+API (JSON, `/api/v1/`; phases 5/6 extend it):
+
+| Endpoint | |
+|---|---|
+| `GET status` | plugin, wifi, bluetooth, brightness, volume, encoder, uptime |
+| `GET/POST brightness`, `volume` | `{"value": 0-100}` |
+| `GET plugins`, `GET plugins/<name>` | list / one plugin |
+| `POST plugins/next`, `prev`, `order` | rotate, reorder (`{"order": [...]}`) |
+| `POST plugins/<name>/show`, `enable`, `disable`, `unquarantine` | |
+| `GET/POST settings` | delay, hostname, time zone, API token (write-only) |
+| `GET/POST wifi`, `POST wifi/forget` | status; save `{ssid, password}` and reboot |
+| `POST wifi/scan` (202), `GET wifi/networks` | background scan, results |
+| `GET bluetooth`, `POST bluetooth/forget`, `bluetooth/pairable` | |
+| `GET system`, `GET system/logs`, `POST system/reboot` | |
+
+Discover, Notifications and Sounds pages are placeholders until phases 3 and 4.
 
 ## Develop
 

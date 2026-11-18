@@ -5,8 +5,8 @@
     python3 gitmatrix/tools/deploy.py --dry-run    # just print the plan
     python3 gitmatrix/tools/deploy.py --port /dev/cu.usbmodem1101 --reset
 
-User data (/config.py, /data, /secrets, /bt_link_keys.bin, /contrib_data.json) is
-never touched. Needs `mpremote` (pip install mpremote).
+User data (/config.py, /gitmatrix_config.py, /data, /secrets, /bt_link_keys.bin,
+/contrib_data.json) is never touched. Needs `mpremote` (pip install mpremote).
 """
 
 import argparse
@@ -21,6 +21,7 @@ MAPPING = [
     ("modules/python", "/lib"),
     ("firmware/lib/plugins", "/lib/plugins"),
     ("firmware/defaults", "/defaults"),
+    ("firmware/html", "/html"),
     ("firmware/main.py", "/main.py"),
 ]
 

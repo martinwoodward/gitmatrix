@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Settings · GitMatrix</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<main>
+<h1>Settings</h1>
+<section>
+  <h2>Display &amp; sound</h2>
+  <label for="brightness">Brightness <span id="brightness-v"></span></label>
+  <input type="range" id="brightness" min="0" max="100">
+  <label for="volume">Volume <span id="volume-v"></span></label>
+  <input type="range" id="volume" min="0" max="100">
+</section>
+<section>
+  <h2>Device</h2>
+  <label for="hostname">Network name (http://<i>name</i>.local, applies after a reboot)</label>
+  <input type="text" id="hostname" maxlength="32" autocapitalize="off" spellcheck="false">
+  <label for="tz">Time zone</label>
+  <select id="tz"></select>
+  <div class="actions"><button class="primary" id="save">Save</button></div>
+</section>
+<section>
+  <h2>API token</h2>
+  <p class="muted">Optional. When set, scripts and Home Assistant must send <span class="mono">Authorization: Bearer &lt;token&gt;</span> to <span class="mono">/api/v1</span>. These pages keep working.</p>
+  <p id="token-state" class="muted"></p>
+  <label for="token">New token (blank to remove)</label>
+  <div class="row"><input class="grow" type="password" id="token" maxlength="64" autocomplete="off"><button id="save-token">Set token</button></div>
+</section>
+</main>
+<script src="/static/app.js"></script>
+<script>
+function slider(id) {
+  const input = $("#" + id);
+  input.oninput = () => { $(`#${id}-v`).textContent = input.value + "%"; };
+  input.onchange = () => attempt(() => api("/" + id, { value: Number(input.value) }));
+}
+function render(s) {
+  for (const id of ["brightness", "volume"]) { $("#" + id).value = s[id]; $(`#${id}-v`).textContent = s[id] + "%"; }
+  $("#hostname").value = s.hostname;
+  const tz = $("#tz");
+  tz.replaceChildren(...s.time_zones.map((z) => el("option", { value: z.key, selected: z.key === s.time_zone }, z.label)));
+  $("#token-state").textContent = s.token_set ? "A token is set." : "No token: the API is open on your network.";
+}
+slider("brightness");
+slider("volume");
+$("#save").onclick = async () => {
+  const s = await attempt(() => api("/settings", { hostname: $("#hostname").value, time_zone: $("#tz").value }), "Saved");
+  if (s) { render(s); if (s.reboot_required) toast("Saved. Reboot (System page) to use the new name."); }
+};
+$("#save-token").onclick = async () => {
+  const s = await attempt(() => api("/settings", { api_token: $("#token").value }), "Token updated");
+  if (s) { $("#token").value = ""; render(s); }
+};
+attempt(() => api("/settings")).then((s) => s && render(s));
+</script>
+</body>
+</html>

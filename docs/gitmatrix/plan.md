@@ -127,10 +127,11 @@ main.py
 - No WiFi configured → AP `GitMatrix` at 192.168.4.1 + captive DNS. AP is **WPA2** with a default password **`monalisa`** (user asked for `mona`; WPA2 requires 8–63 chars; changeable in `/gitmatrix_config.py`), shown on the display and in the menu's WiFi screen. AP turned off once STA connects. If the configured network fails for **1 min**, the AP starts as well while STA keeps retrying; it stops once STA connects.
 - Pages: Home (now showing, reorder/enable/disable, delay, Show now), Discover, Plugin settings, Notifications (test sender), Settings (brightness, volume, hostname, timezone, optional API token, alert sound on/off + quiet-hours schedule), Sounds (built-ins, upload/delete custom), WiFi (scan → pick → password → save → reboot), Bluetooth, System (usage, version, reboot, logs, plugin errors/quarantine).
 - **Scan while streaming** briefly starves A2DP → UI warns "audio may stutter" (or defer until paused).
+- **Implemented (phase 2)**: `gitmatrix._wifi` (state machine ticked every 500 ms from the asyncio loop; scans run in a spawned task; `wifi.py` is an Art Matrix-compatible shim over it), `gitmatrix._web` (phew routes, JSON API under `/api/v1/`, static pages from `/html`, captive 302 to `/wifi.html` in AP mode), `gitmatrix._log` (RAM ring, never written to flash). Saving WiFi schedules a watchdog reboot (`gitmatrix.reboot()`), never `machine.reset()`. Discover, Plugin settings, Notifications and Sounds pages are placeholders. Not yet done: *hold 10 s → WiFi reset* (§2.2); use Forget network in the UI, or clear `wifi_ssid` in `/config.py`.
 
 ### 2.8 Security (matches Art Matrix)
 - Web UI and API are **open on the LAN** by default, like Art Matrix.
-- Optional **API token** (Settings): when set, `/api/v1/*` and the notify webhook require `Authorization: Bearer <token>`; the UI keeps working from the browser via a cookie set on entry.
+- Optional **API token** (Settings): when set, `/api/v1/*` and the notify webhook require `Authorization: Bearer <token>`; the UI keeps working from the browser via a cookie set on entry (`gm_token`, `HttpOnly; SameSite=Strict`, set when the device serves an HTML page; state-changing cookie requests must have a matching `Origin`). This stops cross-site requests and casual scripts, not someone already browsing the LAN UI.
 - Setup AP is WPA2 with a default password shown on the display (§2.7).
 - Plugin/index downloads use `CERT_NONE` (as Art Matrix). Secrets are write-only in the UI but stored unencrypted.
 - Plugins are trusted code; the plugin repo is only changeable on the filesystem.
@@ -179,8 +180,8 @@ main.py
 
 ## 4. Phases (each gated on audio/latency measurements)
 0. **Spikes**: (a) A2DP streaming + STA + AP + phew + scan + TLS fetch, measure underruns; (b) watchdog/POWMAN scratch registers survive WDT reset; (c) **sound fallback**: pause/resume A2DP sink (or deinit/init) and play WAV via `machine.I2S` on the speaker pins, measure resume time and reconnect behaviour; (d) flash-write stall length while streaming; (e) LittleFS rename atomicity assumptions.
-1. **Core runtime + baseline BT**: boot, config, display host, plugin loader + fault containment, crash marker/safe mode, encoder events, snappy menu, BT speaker "GitMatrix", `audio`/`mic` API, port existing widgets (Graph, Clock, Stars…) + demos as built-in plugins.
-2. **Networking + security**: wifi, AP provisioning + captive portal, scan/save/reboot, mDNS, WPA2 setup AP + fallback AP, optional API token, web UI skeleton.
+1. **Core runtime + baseline BT** ✅: boot, config, display host, plugin loader + fault containment, crash marker/safe mode, encoder events, snappy menu, BT speaker "GitMatrix", `audio`/`mic` API, port existing widgets (Graph, Clock, Stars…) + demos as built-in plugins.
+2. **Networking + security** ✅ (host-tested; on-device checks below): wifi, AP provisioning + captive portal, scan/save/reboot, mDNS, WPA2 setup AP + fallback AP, optional API token, web UI skeleton.
 3. **Plugin store**: repo from `/gitmatrix_config.py`, index cache, discover/search, transactional install/update/remove, settings schema + secrets, state API.
 4. **Notifications**: API, queue, limits, text/PNG renderer + scroll/scale rules, plugin-forcing, sounds (pause-A2DP fallback), custom sounds, quiet hours.
 5. **REST API v1 complete** (status, events, plugins, sound, brightness/volume).
@@ -191,3 +192,14 @@ main.py
 - CPython host harness with stubbed picovector/`screen` for unit tests: loader fault containment, settings schema + secret redaction, notification validation/limits/scroll rules, install reconciliation, config migration.
 - On-device smoke + soak via `mpremote`: boot, AP, install, notify, 1-hour streaming soak logging `underruns()`, power-cut-during-install.
 - ruff with artmatrix config.
+
+### 5.1 Phase 2 on-device checklist (not yet run; host harness only)
+- [ ] `network.WLAN.SEC_WPA2` exists on 1.29 and the setup AP really is WPA2 with `monalisa`.
+- [ ] STA + AP coexist (fallback AP while STA retries), and the AP drops once STA connects.
+- [ ] `network.hostname()` set before `active(True)` makes `gitmatrix.local` resolve (mDNS).
+- [ ] `asyncio.start_server` works on 1.29, and tasks created in `boot()` (captive DNS) survive `asyncio.run`; the DNS socket survives AP restarts.
+- [ ] Captive portal opens the WiFi page on iOS and Android.
+- [ ] Scan time (~2 s blocking in CYW43) and audio underruns while A2DP streams; same for page loads.
+- [ ] Save & reboot → watchdog reboot → joins the new network.
+- [ ] `bt_audio.set_pairable` exists (else the toggle only changes config).
+- [ ] Free RAM with phew loaded, and page load speed from flash.

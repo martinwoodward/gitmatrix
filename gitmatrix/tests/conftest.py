@@ -33,6 +33,7 @@ def root(tmp_path):
     """A fresh device filesystem: defaults + built-in plugins, ROOT pointed at it."""
     shutil.copytree(os.path.join(FIRMWARE, "defaults"), tmp_path / "defaults")
     shutil.copytree(os.path.join(FIRMWARE, "lib"), tmp_path / "lib")
+    shutil.copytree(os.path.join(FIRMWARE, "html"), tmp_path / "html")
     old_root = _runtime.ROOT
     _runtime.ROOT = str(tmp_path)
     sys.path.insert(0, str(tmp_path / "lib"))
@@ -53,7 +54,19 @@ def root(tmp_path):
         _persist.set_store(old_store)
         _runtime.ROOT = old_root
         _runtime.host = _runtime.loader = _runtime.config = _runtime.current = None
+        _runtime.wifi = _runtime.reboot_at = None
+        _runtime.firmware = {}
         builtins.screen, builtins.display = screen, display
+
+
+@pytest.fixture(autouse=True)
+def _no_dns(monkeypatch):
+    """Never bind a real captive DNS socket; record the calls instead."""
+    from gitmatrix import _wifi
+
+    calls = []
+    monkeypatch.setattr(_wifi, "_start_dns", calls.append)
+    return calls
 
 
 @pytest.fixture
@@ -106,9 +119,10 @@ def rig(root, clock):
     class Rig:
         rt = None
         input = Input()
+        net = None              # set to stubs.FakeNetwork() before boot() for WiFi
 
         def boot(self):
-            self.rt = _boot.boot(self.input)
+            self.rt = _boot.boot(self.input, network_=self.net)
             return self.rt
 
         def frames(self, n=1, ms=16):

@@ -3,12 +3,14 @@
 import builtins
 
 import gitmatrix
-from gitmatrix import _audio, _compat, _persist, _runtime, _state
-from gitmatrix._config import Config
+from gitmatrix import _audio, _compat, _log, _persist, _runtime, _state
+from gitmatrix._config import Config, load_firmware_config
 from gitmatrix._display import Compositor, DisplayProxy
 from gitmatrix._host import Host
 from gitmatrix._input import Input, PluginInput
 from gitmatrix._loader import PluginLoader
+from gitmatrix._wifi import TICK_MS as WIFI_TICK_MS
+from gitmatrix._wifi import WiFi
 
 try:
     import machine
@@ -51,11 +53,12 @@ class Runtime:
         self.loader = None
         self.host = None
         self.watchdog = None
+        self.wifi = None
         self.booted = 0
         self.healthy = False
 
 
-def boot(input_=None, bt=None):
+def boot(input_=None, bt=None, network_=None):
     rt = Runtime()
     rt.booted = _compat.ticks_ms()
     boots = _persist.bump_boot()
@@ -65,6 +68,8 @@ def boot(input_=None, bt=None):
     _runtime.config = config
     if config.repaired:
         print(f"boot: config repaired ({config.repaired})")
+    _runtime.firmware = load_firmware_config()
+    _runtime.reboot_at = None
 
     real_screen = builtins.screen
     real_display = builtins.display
@@ -101,6 +106,12 @@ def boot(input_=None, bt=None):
         host.show_message(f"{crashed} hung and was stopped", 5000, 25)
     elif safe:
         print(f"boot: safe mode, {safe}")
+    # after Bluetooth is up: WiFi shares the CYW43 radio with it
+    rt.wifi = _runtime.wifi = WiFi(config, _runtime.firmware, network_)
+    try:
+        rt.wifi.start()
+    except Exception as e:  # noqa: BLE001 - no WiFi is bad, but no display and speaker is worse
+        _log.log(f"wifi: start failed {_compat.error_text(e)}")
     config.save()
     rt.watchdog.feed()
     return rt
@@ -116,6 +127,10 @@ def housekeeping(rt, now):
     if not rt.healthy and _compat.ticks_diff(now, rt.booted) > HEALTHY_MS:
         rt.healthy = True
         _persist.clear_boot()
+    if _runtime.reboot_at is not None and _compat.ticks_diff(now, _runtime.reboot_at) >= 0:
+        # asked for by the web UI (WiFi saved, Reboot button); never machine.reset()
+        _runtime.reboot_at = None
+        gitmatrix.reboot()
 
 
 def shutdown(rt):
@@ -160,10 +175,27 @@ async def _housekeeping(rt):
             print(f"housekeeping: {_compat.error_text(e)}")
 
 
+async def _wifi(rt):
+    while True:
+        await _sleep_ms(WIFI_TICK_MS)
+        try:
+            rt.wifi.tick(_compat.ticks_ms())
+        except Exception as e:  # noqa: BLE001 - keep retrying; the display carries on
+            _log.log(f"wifi: {_compat.error_text(e)}")
+
+
 async def _main(rt):
     import asyncio
 
     asyncio.create_task(_housekeeping(rt))
+    if rt.wifi is not None and rt.wifi.net is not None:
+        asyncio.create_task(_wifi(rt))
+        try:
+            from gitmatrix import _web
+
+            await _web.start(rt)
+        except Exception as e:  # noqa: BLE001 - the display and speaker must outlive the web UI
+            _log.log(f"web: {_compat.error_text(e)}")
     await _draw(rt)
 
 

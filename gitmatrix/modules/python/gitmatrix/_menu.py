@@ -366,8 +366,9 @@ class Menu:
 
         return SnappyScreen((*label(), "< Back"), select)
 
-    def _bluetooth_screen(self):
+    def _bluetooth_screen(self, start=0):
         api = self.api
+        pairable = "Pairable on" if api.menu_get_pairable() else "Pairable off"
 
         def select(item):
             if item == "Status":
@@ -375,8 +376,12 @@ class Menu:
             elif item == "Forget all":
                 api.menu_forget_bt()
                 self.push(MessageScreen("Forgotten - pair again", 25))
+            elif item.startswith("Pairable"):
+                api.menu_set_pairable(not api.menu_get_pairable())
+                # rebuild so the label shows the new state
+                self.stack[-1] = self._bluetooth_screen(2)
             else:
                 return True
             return False
 
-        return SnappyScreen(("Status", "Forget all", "< Back"), select)
+        return SnappyScreen(("Status", "Forget all", pairable, "< Back"), select, start)

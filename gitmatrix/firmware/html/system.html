@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>System · GitMatrix</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<main>
+<h1>System</h1>
+<section>
+  <h2>About</h2>
+  <dl class="facts" id="facts"></dl>
+  <div class="actions"><button class="danger" id="reboot">Reboot</button></div>
+</section>
+<section>
+  <h2>Plugin problems</h2>
+  <ul class="list" id="problems"></ul>
+</section>
+<section>
+  <div class="row"><h2 class="grow">Log</h2><button id="refresh-log">Refresh</button></div>
+  <pre class="log" id="log"></pre>
+</section>
+</main>
+<script src="/static/app.js"></script>
+<script>
+function render(s) {
+  const mem = s.memory ? `${fmtBytes(s.memory.free)} free of ${fmtBytes(s.memory.free + s.memory.used)}` : "?";
+  const flash = s.flash ? `${fmtBytes(s.flash.free)} free of ${fmtBytes(s.flash.total)}` : "?";
+  $("#facts").replaceChildren(...[
+    ["GitMatrix", s.version], ["MicroPython", s.micropython], ["Up for", s.uptime_ms != null ? fmtAge(s.uptime_ms) : "?"],
+    ["Memory", mem], ["Flash", flash], ["Safe mode", s.safe_mode ? "ON: plugins are not running" : "Off"],
+  ].flatMap(([k, v]) => [el("dt", {}, k), el("dd", { class: k === "Safe mode" && s.safe_mode ? "bad" : "" }, v)]));
+  const items = [];
+  for (const [name, reason] of Object.entries(s.quarantined)) {
+    items.push(el("li", {}, el("div", { class: "grow" }, el("b", {}, name), " quarantined: ", reason),
+      el("button", { onclick: async () => { await attempt(() => api(`/plugins/${name}/unquarantine`, {}), "Un-quarantined"); load(); } }, "Un-quarantine")));
+  }
+  for (const e of s.errors.slice(-10).reverse()) {
+    items.push(el("li", {}, el("div", { class: "grow mono" }, `${e.plugin}.${e.hook}: ${e.error}`)));
+  }
+  $("#problems").replaceChildren(...(items.length ? items : [el("li", { class: "muted" }, "None. Everything is behaving.")]));
+}
+async function logs() {
+  const l = await attempt(() => api("/system/logs"));
+  if (l) $("#log").textContent = l.lines.map((x) => `${fmtAge(x.age_ms).padStart(7)} ago  ${x.text}`).join("\n") || "(empty)";
+}
+const load = () => attempt(() => api("/system")).then((s) => s && render(s));
+$("#reboot").onclick = async () => { if (confirm("Reboot GitMatrix?") && await attempt(() => api("/system/reboot", {}))) rebooting(); };
+$("#refresh-log").onclick = logs;
+load();
+logs();
+</script>
+</body>
+</html>

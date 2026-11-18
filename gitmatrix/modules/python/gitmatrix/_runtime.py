@@ -9,6 +9,9 @@ loader = None      # the PluginLoader
 config = None      # the Config
 audio = None       # the Audio analyser
 current = None     # Plugin whose hook is running right now (or None for the host)
+wifi = None        # the WiFi manager (gitmatrix._wifi.WiFi)
+firmware = {}      # /gitmatrix_config.py values (AP_PASSWORD, PLUGIN_REPO, ...)
+reboot_at = None   # ticks_ms when housekeeping should reboot (after a web request)
 
 
 def path(p):

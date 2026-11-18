@@ -175,6 +175,7 @@ class FakeBT:
         self.keys = b""
         self.loaded_keys = None
         self.keys_dirty = False
+        self.pairable = None
 
     def init(self, name="GitMatrix"):
         self.name = name
@@ -212,6 +213,89 @@ class FakeBT:
     def push(self, bins):
         self.bins = list(bins) + [0] * (512 - len(bins))
         self.seq += 1
+
+    def set_pairable(self, on):
+        self.pairable = bool(on)
+
+
+class WLAN:
+    """network.WLAN stand-in: connect() never blocks; tests flip .up / .code."""
+
+    SEC_WPA2 = 4
+
+    def __init__(self, net, iface):
+        self.net = net
+        self.iface = iface
+        self.on = False
+        self.settings = {}
+        self.joins = []          # (ssid, password) per connect()
+        self.disconnects = 0
+        self.up = False
+        self.code = 0
+        self.result = 1          # status() after connect(): 1 connecting, -2 not found, -3 bad password
+        self.addr = ("192.168.1.42", "255.255.255.0", "192.168.1.1", "192.168.1.1")
+        self.found = []
+        self.scans = 0
+
+    def active(self, on=None):
+        if on is None:
+            return self.on
+        self.on = bool(on)
+        if not on:
+            self.up = False
+        return None
+
+    def config(self, *args, **kwargs):
+        if args:
+            return self.settings.get(args[0])
+        self.settings.update(kwargs)
+        return None
+
+    def connect(self, ssid, password=None):
+        if not self.on:
+            raise OSError("interface not active")
+        self.joins.append((ssid, password))
+        self.code = self.result
+
+    def disconnect(self):
+        self.disconnects += 1
+        self.up = False
+
+    def isconnected(self):
+        return self.on and self.up
+
+    def status(self):
+        return 3 if self.isconnected() else self.code
+
+    def ifconfig(self):
+        return self.addr
+
+    def scan(self):
+        if not self.on:
+            raise OSError("interface not active")
+        self.scans += 1
+        return list(self.found)
+
+
+class FakeNetwork:
+    """The `network` module: one STA and one AP WLAN, and the hostname."""
+
+    STA_IF = 0
+    AP_IF = 1
+
+    def __init__(self):
+        self.name = None
+        self.sta = WLAN(self, 0)
+        self.ap = WLAN(self, 1)
+
+    def hostname(self, name=None):
+        if name is None:
+            return self.name
+        self.name = name
+        return None
+
+    def WLAN(self, iface):  # noqa: N802 - device name
+        return self.sta if iface == self.STA_IF else self.ap
 
 
 class Mem32(dict):

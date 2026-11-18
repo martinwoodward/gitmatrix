@@ -27,3 +27,19 @@ quiet_hours = (22, 7)
 
 # Reboot if the firmware stops responding for 8 s (and stop the plugin that hung)
 watchdog = True
+
+# WiFi network to join (set from the web UI's WiFi page). With no network the
+# 'GitMatrix' access point starts so you can set one up.
+wifi_ssid = None
+wifi_password = None
+# Name on the network: http://gitmatrix.local
+wifi_hostname = "gitmatrix"
+
+# Time zone for clocks (see timezones.py for the keys)
+time_zone = "uk"
+
+# Set to require `Authorization: Bearer <token>` on /api/v1 (the web pages keep working)
+api_token = None
+
+# Let new phones find and pair with the speaker
+bt_pairable = True

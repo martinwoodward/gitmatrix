@@ -7,6 +7,8 @@ from gitmatrix import _compat, _runtime
 
 CONFIG_PATH = "/config.py"
 DEFAULTS_PATH = "/defaults/config.py"
+FIRMWARE_PATH = "/gitmatrix_config.py"
+FIRMWARE_DEFAULTS_PATH = "/defaults/gitmatrix_config.py"
 
 
 def _exec_file(path):
@@ -125,6 +127,31 @@ class Config:
         _compat.write_atomic(self.path, "\n".join(out) + "\n")
         self.dirty = False
         return True
+
+
+def load_firmware_config(path=None, defaults_path=None):
+    """/gitmatrix_config.py: firmware settings that the web UI never shows
+    (AP_SSID, AP_PASSWORD, PLUGIN_REPO, PLUGIN_BRANCH). Created from the defaults
+    when missing; missing keys fall back to the defaults."""
+    path = path or _runtime.path(FIRMWARE_PATH)
+    defaults_path = defaults_path or _runtime.path(FIRMWARE_DEFAULTS_PATH)
+    values = {}
+    try:
+        values = _exec_file(defaults_path)
+    except (OSError, SyntaxError) as e:
+        print(f"config: no firmware defaults ({_compat.error_text(e)})")
+    if not _compat.exists(path):
+        if _compat.exists(defaults_path):
+            try:
+                _copy(defaults_path, path)
+            except OSError as e:
+                print(f"config: could not create {path} ({_compat.error_text(e)})")
+        return values
+    try:
+        values.update(_exec_file(path))
+    except Exception as e:  # noqa: BLE001 - a typo here must not stop boot
+        print(f"config: {path} is broken ({_compat.error_text(e)}), using defaults")
+    return values
 
 
 def _assigned_key(line):
