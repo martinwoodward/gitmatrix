@@ -110,32 +110,46 @@ def test_unquarantine(web):
 
 def test_settings_saves_config(web):
     s = ok("POST", "/api/v1/settings", {"delay": 12, "hostname": "Desk", "time_zone": "pacific", "brightness": 40})
-    assert s["reboot_required"] and s["hostname"] == "desk" and s["delay"] == 12
+    assert s["restarting_wifi"] and s["hostname"] == "desk" and s["delay"] == 12
+    assert _runtime.wifi_restart_at is not None and _runtime.reboot_at is None
+    _boot.housekeeping(web.rt, web.clock.advance(2000))
+    assert web.net.name == "desk" and web.rt.wifi.hostname == "desk"   # applied in place
     text = (web.root / "config.py").read_text()
     assert "wifi_hostname = 'desk'" in text and "delay = 12" in text and "time_zone = 'pacific'" in text
     assert any(z["key"] == "uk" for z in s["time_zones"])
     assert call("POST", "/api/v1/settings", {"hostname": "bad name"}).status == 400
     assert call("POST", "/api/v1/settings", {"time_zone": "mars"}).status == 400
     assert call("POST", "/api/v1/settings", {"delay": -1}).status == 400
-    assert "reboot_required" not in ok("POST", "/api/v1/settings", {"hostname": "desk"})
+    assert "restarting_wifi" not in ok("POST", "/api/v1/settings", {"hostname": "desk"})
 
 
-def test_wifi_save_writes_config_and_reboots(web):
+def test_wifi_save_writes_config_and_rejoins_in_place(web):
     r = ok("POST", "/api/v1/wifi", {"ssid": "office", "password": "letmein99"})
-    assert r == {"ok": True, "rebooting": True, "ssid": "office", "url": "http://gitmatrix.local"}
+    assert r == {"ok": True, "restarting_wifi": True, "ssid": "office", "url": "http://gitmatrix.local"}
     text = (web.root / "config.py").read_text()
     assert "wifi_ssid = 'office'" in text and "wifi_password = 'letmein99'" in text
-    assert _runtime.reboot_at is not None
+    assert _runtime.wifi_restart_at is not None
     _boot.housekeeping(web.rt, web.clock.advance(100))  # response still going out
-    with pytest.raises(SystemExit, match="reboot"):
-        _boot.housekeeping(web.rt, web.clock.advance(2000))
+    assert web.net.sta.joins[-1] != ("office", "letmein99")
+    _boot.housekeeping(web.rt, web.clock.advance(2000))  # no SystemExit: no reboot
+    assert _runtime.reboot_at is None and _runtime.wifi_restart_at is None
+    assert web.net.sta.joins[-1] == ("office", "letmein99")
+    assert web.rt.wifi.mode == _wifi.CONNECTING and not web.net.ap.on
+
+
+def test_wifi_forget_goes_to_setup_ap_in_place(web):
+    r = ok("POST", "/api/v1/wifi/forget")
+    assert r == {"ok": True, "restarting_wifi": True}
+    _boot.housekeeping(web.rt, web.clock.advance(2000))
+    assert web.rt.wifi.mode == _wifi.SETUP and web.net.ap.on and not web.net.sta.on
+    assert web.net.ap.settings["essid"] == "GitMatrix"
 
 
 def test_wifi_save_validation_and_password_keeping(web):
     assert call("POST", "/api/v1/wifi", {"ssid": ""}).status == 400
     assert call("POST", "/api/v1/wifi", {"ssid": "x" * 33}).status == 400
     assert call("POST", "/api/v1/wifi", {"ssid": "home", "password": "short"}).status == 400
-    assert _runtime.reboot_at is None
+    assert _runtime.wifi_restart_at is None
     ok("POST", "/api/v1/wifi", {"ssid": "home"})           # same network: keep the password
     assert web.rt.config.get("wifi_password") == "secret123"
     ok("POST", "/api/v1/wifi", {"ssid": "cafe", "password": ""})  # open network

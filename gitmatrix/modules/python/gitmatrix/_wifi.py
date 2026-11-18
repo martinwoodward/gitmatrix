@@ -159,6 +159,7 @@ class WiFi:
                     wlan.active(False)
             except OSError as e:
                 _log.log(f"wifi: reset failed {_compat.error_text(e)}")
+        self.ap_on = False
         if self.ssid is None:
             self.mode = SETUP
             self._ap(True)
@@ -169,6 +170,14 @@ class WiFi:
         self.since = now
         self._connect(now)
         return self
+
+    def restart(self, now=None):
+        """Apply changed WiFi settings (network, hostname, forget) in place: the
+        interfaces go down and come back up, no reboot."""
+        _log.log("wifi: applying new settings")
+        self.attempts = 0
+        self.ip = None
+        return self.start(now)
 
     def _connect(self, now):
         self.attempt_at = now

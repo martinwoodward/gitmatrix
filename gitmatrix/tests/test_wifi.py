@@ -205,3 +205,22 @@ def test_valid_hostname():
     assert not _wifi.valid_hostname("has space")
     assert not _wifi.valid_hostname("x" * 33)
     assert not _wifi.valid_hostname("")
+
+
+def test_restart_applies_settings_in_place_and_brings_the_ap_back():
+    w, net = make()
+    w.start(0)
+    assert w.mode == SETUP and net.ap.on
+    w.restart(100)                         # still no network: the AP must come back up
+    assert w.mode == SETUP and net.ap.on and w.ap_on
+    w.config.set("wifi_ssid", "home")
+    w.config.set("wifi_hostname", "desk")
+    w.restart(200)
+    assert w.mode == CONNECTING and not net.ap.on and net.sta.joins[-1] == ("home", None)
+    assert net.name == "desk"
+    net.sta.up = True
+    assert w.tick(300) == CONNECTED
+    w.config.set("wifi_ssid", None)        # forget
+    w.restart(400)
+    assert w.mode == SETUP and net.ap.on and not net.sta.on and w.ip is None
+    assert w.dns_calls == ["192.168.4.1"]  # the captive DNS server is started once

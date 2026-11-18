@@ -74,7 +74,7 @@ def boot(input_=None, bt=None, network_=None):
     if config.repaired:
         print(f"boot: config repaired ({config.repaired})")
     _runtime.firmware = load_firmware_config()
-    _runtime.reboot_at = None
+    _runtime.reboot_at = _runtime.wifi_restart_at = None
 
     # contribution_widget's globals live in MicroPython's builtins override dict:
     # a bare name finds them, but builtins.screen raises AttributeError
@@ -156,8 +156,15 @@ def housekeeping(rt, now):
     if not rt.healthy and _compat.ticks_diff(now, rt.booted) > HEALTHY_MS:
         rt.healthy = True
         _persist.clear_boot()
+    if _runtime.wifi_restart_at is not None and _compat.ticks_diff(now, _runtime.wifi_restart_at) >= 0:
+        # WiFi saved/forgotten or the hostname changed: re-apply in place
+        _runtime.wifi_restart_at = None
+        if rt.wifi is not None:
+            rt.watchdog.feed()
+            rt.wifi.restart()
+            rt.watchdog.feed()
     if _runtime.reboot_at is not None and _compat.ticks_diff(now, _runtime.reboot_at) >= 0:
-        # asked for by the web UI (WiFi saved, Reboot button); never machine.reset()
+        # asked for by the web UI (System -> Reboot); never machine.reset()
         _runtime.reboot_at = None
         gitmatrix.reboot()
 

@@ -18,7 +18,7 @@
 </section>
 <section>
   <h2>Device</h2>
-  <label for="hostname">Network name (http://<i>name</i>.local, applies after a reboot)</label>
+  <label for="hostname">Network name (http://<i>name</i>.local, the WiFi reconnects to apply it)</label>
   <input type="text" id="hostname" maxlength="32" autocapitalize="off" spellcheck="false">
   <label for="tz">Time zone</label>
   <select id="tz"></select>
@@ -71,7 +71,7 @@ slider("brightness");
 slider("volume");
 $("#save").onclick = async () => {
   const s = await attempt(() => api("/settings", { hostname: $("#hostname").value, time_zone: $("#tz").value }), "Saved");
-  if (s) { render(s); if (s.reboot_required) toast("Saved. Reboot (System page) to use the new name."); }
+  if (s) { render(s); if (s.restarting_wifi) rebooting(`WiFi is reconnecting with the new name. Visit http://${s.hostname}.local in a few seconds.`, "Renaming…"); }
 };
 $("#save-token").onclick = async () => {
   const s = await attempt(() => api("/settings", { api_token: $("#token").value }), "Token updated");

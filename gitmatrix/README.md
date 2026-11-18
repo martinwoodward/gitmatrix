@@ -64,15 +64,15 @@ python3 gitmatrix/tools/deploy.py --reset
 User data (`/config.py`, `/gitmatrix_config.py`, `/data`, `/secrets`, `/bt_link_keys.bin`)
 and store-installed plugins (`/lib/plugins/active.json`) are left alone. Stop any
 Bluetooth playback before deploying: a flash write while the speaker streams can hang the
-board. `--reset` reboots via the watchdog; warm resets can occasionally hang this board
-([phase0.md](../docs/gitmatrix/phase0.md)), so leave it off and replug instead if you prefer.
+board. `--reset` soft-resets when done (never a warm reset, which can occasionally hang this
+board: [phase0.md](../docs/gitmatrix/phase0.md)).
 
 ## WiFi and the web UI
 
 - No network saved: the device starts a WPA2 access point **GitMatrix** (password
   **`monalisa`**, change it in `/gitmatrix_config.py`) at `http://192.168.4.1`, with a
   captive portal that lands on the WiFi page. Scan, pick a network, enter the password,
-  **Save & reboot**.
+  **Save & join**. The device leaves setup mode and joins in place (no reboot).
 - Network saved: it joins it as `gitmatrix.local` (hostname in Settings). The AP is off
   while connected. If the network can't be reached for 1 minute the setup AP comes back
   as well, while it keeps retrying; it goes away again once connected.
@@ -100,7 +100,7 @@ can send calls and watch events):
 | `POST plugins/<name>/enable`, `disable`, `unquarantine` | |
 | `POST/DELETE sound` | play a sound now (`{sound \| sound_url \| sound_data, priority, force}`) under the alert settings; stop it |
 | `GET/POST settings` | delay, hostname, time zone, API token (write-only), alert sound and quiet hours |
-| `GET/POST wifi`, `POST wifi/forget` | status; save `{ssid, password}` and reboot |
+| `GET/POST wifi`, `POST wifi/forget` | status; save `{ssid, password}` or forget, applied in place (WiFi restarts, no reboot) |
 | `POST wifi/scan` (202, 429 within 15 s of the last), `GET wifi/networks` | rescan, results |
 | `GET bluetooth`, `POST bluetooth/forget`, `bluetooth/pairable` | |
 | `GET system`, `GET system/logs`, `POST system/reboot` | |
@@ -219,7 +219,7 @@ every device file with the real 1.29 compiler; without it those cases are skippe
   Background tasks a plugin starts with `gitmatrix.create_task` are not watched.
 - Warm resets are avoided: on this board `machine.reset()`, a watchdog reset or
   `picotool reboot` hangs the whole chip about one time in three until it is unplugged
-  ([phase0.md](../docs/gitmatrix/phase0.md)). Settings, MQTT and plugin changes apply in
-  place. Reboots (WiFi save/forget, **System → Reboot**, `deploy.py --reset`) are soft
-  resets: `gitmatrix.reboot()` stops the watchdog, then calls `machine.soft_reset()`
+  ([phase0.md](../docs/gitmatrix/phase0.md)). Settings, WiFi (save, forget, hostname), MQTT
+  and plugin changes apply in place. The only reboots (**System → Reboot**, `deploy.py
+  --reset`, a host crash) are soft resets: `gitmatrix.reboot()` stops the watchdog, then calls `machine.soft_reset()`
   ([ondevice.md](../docs/gitmatrix/ondevice.md)).

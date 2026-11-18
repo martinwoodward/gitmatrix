@@ -60,6 +60,7 @@ def root(tmp_path):
         _runtime.ROOT = old_root
         _runtime.host = _runtime.loader = _runtime.config = _runtime.current = None
         _runtime.wifi = _runtime.reboot_at = _runtime.notifier = _runtime.events = None
+        _runtime.wifi_restart_at = None
         _runtime.mqtt = None
         gitmatrix.notification = None
         _runtime.firmware = {}

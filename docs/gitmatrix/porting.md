@@ -133,7 +133,7 @@ plugin without them behaves as on Art Matrix.
 | --- | --- | --- |
 | 5 failing `update()`s in a row | skipped until reboot | quarantined (persisted, `!` in the menu; select it to retry) |
 | Import error | logged, plugin not loaded | quarantined |
-| Hang | device stops | the 8 s watchdog reboots; the plugin is quarantined on the next boot |
+| Hang | device stops | after 5 s the hang watch interrupts the hook and quarantines the plugin, no reset; a viper/native loop it can't interrupt meets the 8 s watchdog (replug if the display stays dark) |
 | `requires_internet` | plugin only rotates while online | shown on Discover; the plugin rotates regardless, so handle being offline |
 | Background work | `asyncio.create_task` | `gitmatrix.create_task(coro)` (tracked, cancelled on quarantine or unload) |
 | Notifications | | `on_notify(data)` and `gitmatrix.notification` |

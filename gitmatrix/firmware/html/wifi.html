@@ -25,7 +25,7 @@
     <input type="password" id="password" maxlength="64" autocomplete="off">
     <label><input type="checkbox" id="show"> Show password</label>
     <div class="actions row">
-      <button class="primary" type="submit">Save &amp; reboot</button>
+      <button class="primary" type="submit">Save &amp; join</button>
       <button class="danger" type="button" id="forget">Forget network</button>
     </div>
   </form>
@@ -70,12 +70,12 @@ $("#join").onsubmit = async (e) => {
   const body = { ssid: $("#ssid").value };
   if ($("#password").value) body.password = $("#password").value;
   const r = await attempt(() => api("/wifi", body));
-  if (r) rebooting(`Joining "${r.ssid}". Reconnect your phone or computer to that network, then visit ${r.url} (or the address scrolling on the device: press the button and choose WiFi).`);
+  if (r) rebooting(`Joining "${r.ssid}" (no reboot: plugins and the speaker keep running). Reconnect your phone or computer to that network, then visit ${r.url} (or the address scrolling on the device: press the button and choose WiFi).`, "Switching WiFi…");
 };
 $("#forget").onclick = async () => {
-  if (!confirm("Forget the saved network? GitMatrix will reboot into setup mode.")) return;
+  if (!confirm("Forget the saved network? GitMatrix will leave it and start its setup WiFi.")) return;
   const r = await attempt(() => api("/wifi/forget", {}));
-  if (r) rebooting("Rebooting into setup mode: join the 'GitMatrix' WiFi and visit http://192.168.4.1.");
+  if (r) rebooting("Starting setup mode: join the 'GitMatrix' WiFi and visit http://192.168.4.1.", "Switching WiFi…");
 };
 attempt(() => api("/wifi")).then((w) => w && renderStatus(w));
 poll();

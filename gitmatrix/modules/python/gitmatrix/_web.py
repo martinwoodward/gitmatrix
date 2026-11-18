@@ -182,6 +182,12 @@ def schedule_reboot(delay_ms=REBOOT_DELAY_MS):
     _log.log("system: reboot requested")
 
 
+def schedule_wifi_restart(delay_ms=REBOOT_DELAY_MS):
+    """Re-apply WiFi settings from housekeeping once this response has gone out."""
+    _runtime.wifi_restart_at = _compat.ticks_add(_compat.ticks_ms(), delay_ms)
+    _log.log("wifi: restart requested")
+
+
 def _host():
     return _runtime.host
 
@@ -789,7 +795,7 @@ def _zones():
 @api("/settings", ("GET", "POST"))
 def settings(request):
     cfg = _config()
-    reboot = False
+    restart_wifi = False
     if request.method == "POST":
         body = _body(request)
         if "brightness" in body:
@@ -809,7 +815,7 @@ def settings(request):
                 raise ValueError("hostname: letters, digits and '-' only, up to 32")
             if name != cfg.get("wifi_hostname"):
                 cfg.set("wifi_hostname", name)
-                reboot = True
+                restart_wifi = True
         if "time_zone" in body:
             zone = str(body["time_zone"])
             keys = [k for k, _ in _zones()]
@@ -825,6 +831,8 @@ def settings(request):
         _alert_settings(cfg, body)
         if _flash.can_write():
             cfg.save()      # else housekeeping saves it once playback stops
+        if restart_wifi:
+            schedule_wifi_restart()
     out = {
         "brightness": cfg.get("brightness", 60),
         "volume": _volume_percent(),
@@ -835,8 +843,8 @@ def settings(request):
         "token_set": _token() is not None,
     }
     out.update(_alert_values(cfg))
-    if reboot:
-        out["reboot_required"] = True
+    if restart_wifi:
+        out["restarting_wifi"] = True
     resp = reply(out)
     token = _token()
     if request.method == "POST" and token is not None:
@@ -923,12 +931,12 @@ def wifi_save(request):
         cfg.set("wifi_hostname", name)
     cfg.set("wifi_ssid", ssid)
     cfg.set("wifi_password", password)
-    out = {"ok": True, "rebooting": True, "ssid": ssid}
+    out = {"ok": True, "restarting_wifi": True, "ssid": ssid}
     if _flash.streaming():
         out["warning"] = _flash.AUDIO_WARNING
     with _flash.pause():
         cfg.save(force=True)
-    schedule_reboot()
+    schedule_wifi_restart()
     host = cfg.get("wifi_hostname") or _wifi.DEFAULT_HOSTNAME
     out["url"] = f"http://{host}.local"
     return out
@@ -939,12 +947,12 @@ def wifi_forget(_request):
     cfg = _config()
     cfg.set("wifi_ssid", None)
     cfg.set("wifi_password", None)
-    out = {"ok": True, "rebooting": True}
+    out = {"ok": True, "restarting_wifi": True}
     if _flash.streaming():
         out["warning"] = _flash.AUDIO_WARNING
     with _flash.pause():
         cfg.save(force=True)
-    schedule_reboot()
+    schedule_wifi_restart()
     return out
 
 

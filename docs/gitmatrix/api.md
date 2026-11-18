@@ -381,7 +381,7 @@ Turning discovery off, or changing the prefix, base topic or broker, removes the
 |---|---|
 | `brightness`, `volume` | 0-100 |
 | `delay` | seconds per plugin in the rotation, 0-86400 (0 = no rotation) |
-| `hostname` | the mDNS name; a change returns `reboot_required: true` |
+| `hostname` | the mDNS name; a change returns `restarting_wifi: true` and the WiFi reconnects in ~1.5 s to apply it (no reboot) |
 | `time_zone` | a key from `time_zones` |
 | `api_token` | write-only. Up to 64 characters, with no spaces, quotes, `;` or `,`. Send `""` to remove it. `GET` shows `token_set` |
 | `alert_sound`, `quiet_hours_enabled`, `quiet_bypass_high`, `alert_interrupt_audio` | booleans |
@@ -392,8 +392,8 @@ Turning discovery off, or changing the prefix, base topic or broker, removes the
 | Call | |
 |---|---|
 | `GET wifi` | mode, ssid, ip, hostname, `audio_streaming`, etc. |
-| `POST wifi` | `{ssid, password?, hostname?}`: saves and reboots in ~1.5 s (a warm reset can occasionally hang until the board is unplugged). Leaving out `password` for the same SSID keeps the stored one |
-| `POST wifi/forget` | forget the network and reboot into setup mode (same reboot caveat) |
+| `POST wifi` | `{ssid, password?, hostname?}`: saves, replies `restarting_wifi: true`, and ~1.5 s later the WiFi rejoins with the new settings in place (no reboot; plugins and the speaker carry on). Leaving out `password` for the same SSID keeps the stored one |
+| `POST wifi/forget` | forget the network; ~1.5 s later the device leaves it and starts the 'GitMatrix' setup AP (no reboot) |
 | `POST wifi/scan` | `202 {"scanning": true}`; 429 + `retry_ms` within 15 s of the last scan. The display pauses while the radio scans |
 | `GET wifi/networks` | `{scanning, networks, age_ms, current}` |
 
@@ -411,7 +411,7 @@ Turning discovery off, or changing the prefix, base topic or broker, removes the
 |---|---|
 | `GET system` | version, MicroPython version, uptime, memory, flash, `audio_pauses`, safe mode, quarantined plugins, recent plugin errors, `reboot_pending` |
 | `GET system/logs` | `{lines: [{age_ms, text}]}`, the in-RAM log |
-| `POST system/reboot` | reboot in ~1.5 s. On this board a warm reset can occasionally hang until it is unplugged, so avoid scripting it |
+| `POST system/reboot` | soft reset (`machine.soft_reset()`, watchdog stopped first) in ~1.5 s. Never a warm reset, which can hang this board until it's unplugged |
 
 The System page's **Developer** section can send any of these calls from the browser and
 can watch the event stream live.

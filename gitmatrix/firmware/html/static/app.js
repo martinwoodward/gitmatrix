@@ -99,9 +99,9 @@ function fmtAge(ms) {
   return Math.floor(s / 86400) + "d " + Math.floor((s % 86400) / 3600) + "h";
 }
 
-function rebooting(msg) {
+function rebooting(msg, title) {
   document.body.replaceChildren(
-    el("section", {}, el("h1", {}, "Rebooting…"), el("p", {}, msg || "GitMatrix is restarting. This page will be back in a few seconds.")),
+    el("section", {}, el("h1", {}, title || "Restarting…"), el("p", {}, msg || "GitMatrix is restarting. This page will be back in a few seconds.")),
   );
 }
 

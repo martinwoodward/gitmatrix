@@ -16,6 +16,7 @@ notifier = None    # the Notifier (gitmatrix._notify.Notifier)
 events = None      # the event Bus (gitmatrix._events.Bus)
 mqtt = None        # the MQTT client (gitmatrix._mqtt.Mqtt), when WiFi exists
 reboot_at = None   # ticks_ms when housekeeping should reboot (after a web request)
+wifi_restart_at = None   # ticks_ms when housekeeping should re-apply WiFi settings
 
 
 def path(p):
