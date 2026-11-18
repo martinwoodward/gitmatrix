@@ -147,6 +147,24 @@ def test_tones_land_in_their_band(bt, clock):
             assert lo <= freq < hi and a.sample_rate() == rate
 
 
+def test_sample_rate_is_read_at_stream_start_then_every_5s(bt, clock, monkeypatch):
+    calls = []
+    real = bt.sample_rate
+    monkeypatch.setattr(bt, "sample_rate", lambda: calls.append(1) or real())
+    a = Audio(bt)
+    bt.streaming_now = True
+    feed(bt, clock, a, tone(1100), 251)         # just over 5 s of FFT frames
+    assert len(calls) == 2
+    bt.rate = 48000
+    feed(bt, clock, a, tone(1100, 48000), 251)
+    assert a.sample_rate() == 48000 and len(calls) == 3
+    bt.streaming_now = False
+    feed(bt, clock, a, tone(1100), 1)
+    bt.streaming_now = True
+    feed(bt, clock, a, tone(1100), 1)
+    assert len(calls) == 4
+
+
 def test_treble_bursts_clap_and_bass_kicks(bt, clock):
     a = Audio(bt)
     bt.streaming_now = True

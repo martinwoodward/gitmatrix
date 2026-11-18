@@ -18,6 +18,9 @@ BANDS = 16
 WAVE = 64
 FFT_SIZE = 1024             # bt_audio publishes FFT_SIZE // 2 magnitude bins
 DEFAULT_RATE = 44100        # used until bt_audio reports the stream's sample rate
+# How often to re-read bt_audio.sample_rate() while streaming. The stock visualiser
+# reads it every 5 s; reading it on every FFT frame coincided with a hang on 1.29.
+RATE_CHECK_MS = 5000
 # (low Hz, high Hz, bands): log-spaced within each region, weighted toward the
 # midrange where most of what we listen to lives. Sub-bass below 60 Hz and the
 # air above 16 kHz are left out.
@@ -81,6 +84,7 @@ class Audio:
         self._wave = array("f", bytes(WAVE * 4))
         self._rate = DEFAULT_RATE
         self._edges = _band_edges(self._rate)
+        self._rate_at = None
         self._seq = -1
         self._scale = MIN_SCALE
         self._level = 0.0
@@ -119,16 +123,19 @@ class Audio:
         self._checked = now
         self._streaming = bool(self._call("streaming", default=False))
         if not self._streaming:
+            self._rate_at = None    # read it again when the next stream starts
             self._decay()
             return
         seq = self._call("fft_seq", default=self._seq)
         if seq == self._seq:
             return
         self._seq = seq
-        rate = self._call("sample_rate", default=0) or DEFAULT_RATE
-        if rate != self._rate:
-            self._rate = rate
-            _band_edges(rate, self._edges)
+        if self._rate_at is None or _compat.ticks_diff(now, self._rate_at) >= RATE_CHECK_MS:
+            self._rate_at = now
+            rate = self._call("sample_rate", default=0) or DEFAULT_RATE
+            if rate != self._rate:
+                self._rate = rate
+                _band_edges(rate, self._edges)
         if self._call("fft_into", self._bins, default=False):
             self._analyse(now)
 
