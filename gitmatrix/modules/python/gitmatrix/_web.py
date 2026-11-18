@@ -1023,7 +1023,10 @@ def bluetooth_forget(_request):
 
 @api("/bluetooth/pairable", ("POST",))
 def bluetooth_pairable(request):
-    _host().menu_set_pairable(_bool(_body(request)["value"]))
+    value = _bool(_body(request)["value"])
+    if not _audio.pairable_supported():
+        return {"error": "this firmware can't change pairability (bt_audio has no set_pairable)"}, 501
+    _host().menu_set_pairable(value)
     return _bt_status()
 
 

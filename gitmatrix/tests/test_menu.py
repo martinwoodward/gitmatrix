@@ -182,6 +182,15 @@ def test_bluetooth_pairable_toggle(rig, bt):
     assert bt.pairable is True
 
 
+def test_bluetooth_menu_hides_pairable_without_firmware_support(rig, bt, monkeypatch):
+    monkeypatch.delattr(type(bt), "set_pairable")
+    boot_two(rig)
+    rig.press()
+    rt = rig.rt
+    choose(rig, "Bluetooth")
+    assert list(top(rt).snappy.items) == ["Status", "Forget all", "< Back"]
+
+
 def test_turn_steps_plugins_with_slide(rig):
     rt = boot_two(rig)
     rig.turn(1)

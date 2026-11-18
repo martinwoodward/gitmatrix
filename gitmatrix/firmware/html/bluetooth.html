@@ -12,7 +12,7 @@
 <section>
   <h2>Speaker</h2>
   <dl class="facts" id="facts"></dl>
-  <label id="pairable-row"><input type="checkbox" id="pairable"> Pairable (let new phones find the speaker)</label>
+  <label id="pairable-row" hidden><input type="checkbox" id="pairable"> Pairable (let new phones find the speaker)</label>
   <div class="actions"><button class="danger" id="forget">Forget paired devices</button></div>
 </section>
 </main>
@@ -24,7 +24,7 @@ function render(b) {
     el("dt", {}, "Connected"), el("dd", {}, b.connected ? "Yes" : "No"),
     el("dt", {}, "Playing"), el("dd", {}, b.streaming ? "Yes" : "No"));
   $("#pairable").checked = b.pairable;
-  $("#pairable-row").title = b.pairable_supported ? "" : "This firmware can't change pairability yet; saved for later.";
+  $("#pairable-row").hidden = !b.pairable_supported;
 }
 $("#pairable").onchange = async () => { const b = await attempt(() => api("/bluetooth/pairable", { value: $("#pairable").checked })); if (b) render(b); };
 $("#forget").onclick = async () => {

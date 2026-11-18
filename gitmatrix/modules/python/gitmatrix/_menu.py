@@ -367,7 +367,10 @@ class Menu:
 
     def _bluetooth_screen(self, start=0):
         api = self.api
-        pairable = "Pairable on" if api.menu_get_pairable() else "Pairable off"
+        items = ("Status", "Forget all")
+        if api.menu_pairable_supported():
+            # 1.29's bt_audio has no set_pairable: offer the toggle only where it works
+            items += ("Pairable on" if api.menu_get_pairable() else "Pairable off",)
 
         def select(item):
             if item == "Status":
@@ -383,4 +386,4 @@ class Menu:
                 return True
             return False
 
-        return SnappyScreen(("Status", "Forget all", pairable, "< Back"), select, start)
+        return SnappyScreen(items + ("< Back",), select, start)

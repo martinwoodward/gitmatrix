@@ -403,7 +403,7 @@ Turning discovery off, or changing the prefix, base topic or broker, removes the
 |---|---|
 | `GET bluetooth` | `{name, connected, streaming, pairable, pairable_supported}` |
 | `POST bluetooth/forget` | forget the paired phone |
-| `POST bluetooth/pairable` | `{"value": true|false}` |
+| `POST bluetooth/pairable` | `{"value": true|false}`; 501 when the firmware can't change pairability (`pairable_supported: false`, as on 1.29; the menu and web page hide the toggle then) |
 
 ### System
 

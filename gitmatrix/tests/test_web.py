@@ -200,6 +200,14 @@ def test_bluetooth(web, bt):
     assert not (web.root / "bt_link_keys.bin").exists()
 
 
+def test_bluetooth_pairable_is_501_without_firmware_support(web, bt, monkeypatch):
+    monkeypatch.delattr(type(bt), "set_pairable")
+    assert not ok("GET", "/api/v1/bluetooth")["pairable_supported"]
+    r = call("POST", "/api/v1/bluetooth/pairable", {"value": False})
+    assert r.status == 501 and "set_pairable" in r.json["error"]
+    assert web.rt.config.get("bt_pairable", True) is True
+
+
 def test_system_logs_and_reboot(web):
     s = ok("GET", "/api/v1/system")
     assert s["version"] and s["flash"]["total"] > 0 and not s["reboot_pending"]

@@ -529,6 +529,9 @@ class Host:
     def menu_forget_bt(self):
         _audio.forget_devices()
 
+    def menu_pairable_supported(self):
+        return _audio.pairable_supported()
+
     def menu_get_pairable(self):
         return bool(self.config.get("bt_pairable", True))
 
