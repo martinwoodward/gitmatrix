@@ -306,6 +306,15 @@ def save_link_keys(bt=None, keys_file=None):
     return False
 
 
+def underruns(bt=None):
+    """bt_audio's buffer underrun counter, or None when the firmware has none."""
+    bt = bt if bt is not None else bt_audio
+    try:
+        return int(bt.underruns())
+    except Exception:  # noqa: BLE001 - missing on other builds, or bt_audio off
+        return None
+
+
 def pairable_supported(bt=None):
     bt = bt if bt is not None else bt_audio
     return bt is not None and hasattr(bt, "set_pairable")

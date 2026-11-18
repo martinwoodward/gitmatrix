@@ -263,6 +263,7 @@ def _bt_status():
         "streaming": bool(audio is not None and audio.streaming()),
         "pairable": bool(_config().get("bt_pairable", True)),
         "pairable_supported": _audio.pairable_supported(),
+        "underruns": _audio.underruns(),
     }
 
 

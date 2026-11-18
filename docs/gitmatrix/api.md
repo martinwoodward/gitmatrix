@@ -401,7 +401,7 @@ Turning discovery off, or changing the prefix, base topic or broker, removes the
 
 | Call | |
 |---|---|
-| `GET bluetooth` | `{name, connected, streaming, pairable, pairable_supported}` |
+| `GET bluetooth` | `{name, connected, streaming, pairable, pairable_supported, underruns}` (`underruns`: bt_audio's buffer underrun counter, `null` if the firmware has none) |
 | `POST bluetooth/forget` | forget the paired phone |
 | `POST bluetooth/pairable` | `{"value": true|false}`; 501 when the firmware can't change pairability (`pairable_supported: false`, as on 1.29; the menu and web page hide the toggle then) |
 

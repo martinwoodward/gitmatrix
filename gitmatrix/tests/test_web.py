@@ -192,6 +192,9 @@ def test_wifi_rescans_are_rate_limited(web):
 def test_bluetooth(web, bt):
     b = ok("GET", "/api/v1/bluetooth")
     assert b["pairable"] and b["pairable_supported"]
+    assert b["underruns"] is None  # the stub has no underruns()
+    bt.underruns = lambda: 7
+    assert ok("GET", "/api/v1/bluetooth")["underruns"] == 7
     assert bt.pairable is True  # applied at boot
     assert not ok("POST", "/api/v1/bluetooth/pairable", {"value": False})["pairable"]
     assert bt.pairable is False and web.rt.config.get("bt_pairable") is False
