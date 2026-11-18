@@ -110,10 +110,8 @@ Conclusion: soft reset is reliable here. `gitmatrix.reboot()` now uses it (4ae00
 - Still to run: menu/encoder by hand, safe mode with the knob held, the 10 s knob WiFi reset,
   button dismiss / second-press menu, fallback AP, captive portal on phones, power cut
   mid-install, the `INTERRUPT_MODE = "restart"` fallback, Home Assistant, a 1-hour soak.
-- The spectrum plugin's bands cover ~86 Hz–10 kHz with even spacing. The user wants them
-  focused on 60 Hz–16 kHz: one bass band (60–250 Hz), most bands in the midrange
-  (250 Hz–4 kHz) and a few for 4–16 kHz. Kick detection would then need reworking. Being done
-  separately.
+- ~~The spectrum plugin's bands cover ~86 Hz–10 kHz with even spacing.~~ Now 1/12/3 bands over
+  60 Hz–16 kHz. See §6 for the on-device check.
 - A steady tone or a sustained chord makes the spectrum look frozen (the bars hold still).
   That's expected rather than a stall: a frequency sweep moves the bars normally.
 
@@ -161,3 +159,41 @@ Bugs fixed in round 2:
 | 7b1573b | The shipped default volume was too loud; now 25% (was 50%) |
 | 9626514 | Deleting a custom sound while it played removed the file under `play()` and hung the chip. Now 409 |
 | 4637aa4 | `/config` ran `process_config` (and the plugin import) outside the hang watch, so a hang there would trip the watchdog |
+
+## 6. Spectrum 60 Hz–16 kHz check (incomplete: device hung twice)
+
+The spectrum branch (1/12/3 bands, kick on band 0, clap on bands 12–15) was merged and
+deployed. A temporary probe plugin printed the bands, kick and clap counts, `fft_seq`, the AGC
+scale and the raw peak every 200 ms. Source level 0.15, device volume 15.
+
+| Check | Result |
+|---|---|
+| `bt_audio.sample_rate()` on 1.29 | Exists. Returns 44100, or 0 when connected but not streaming (`_audio` falls back to 44100) |
+| Log chirp, 60 Hz → 16 kHz over 20 s | PASS up to band 14. Band 0 takes 4.6 s (5.1 s expected), bands 1–12 take 9.6 s (9.9 s expected). The bars move left to right, one band at a time |
+| Band 15 (10–16 kHz) | **Never lights.** Steady tones read: 500 Hz ≈ 1390, 8 kHz ≈ 420, 10 kHz ≈ 5, 12 and 14 kHz = 0. The Mac → SBC → bt_audio path cuts off at about 9.5 kHz, and band 14 (6.3–10 kHz) is about 10 dB down. Not tested with a phone as the source |
+| Kick on kicks, not the bass line | Not measured: the device hung partway through (below) |
+| Clap on snares and hats | Not measured. Hats would also lose everything above ~9.5 kHz |
+| KICK_FLOOR / CLAP_FLOOR tuning | Not done |
+
+Findings:
+
+- **FFT freezes for a whole stream** when the stream starts near-silent. A synthetic drum track
+  starting with a quiet pad (about -46 dBFS) left `streaming()` True while `fft_seq` never
+  advanced for the full 25 s. This happened 2 out of 2 times. The same file with its first
+  second skipped analysed normally. A 2–16 kHz chirp and a high tone ladder, which have no low
+  content at the start, also read all-zero. After the stream ended, the next stream was fine.
+  This is in the C driver: Python only sees `fft_seq` stop.
+- **Two native hangs while streaming:** USB, WiFi and BT all dropped, needing a replug (replug 2
+  was used; the second hang is waiting on replug 3).
+  - Hang 1 happened about 10 s into a chirp sent without `ffmpeg -re`, after a frozen-FFT spell.
+    That build read `sample_rate()` on every FFT frame.
+  - Hang 2 happened about 7 s into a trimmed drum track sent with `-re`, with the FFT healthy.
+    By then the rate reads were throttled to every 5 s (357bc1b), so the throttle did not
+    prevent it.
+  - Both hangs had the probe printing over USB serial at 5 Hz, and both followed several
+    back-to-back short streams. Round 2's 30-minute soak (old spectrum code, one long stream)
+    didn't hang.
+  - Root cause unknown. Suspects: rapid stream stop/start (A2DP suspend/resume), or USB-serial
+    output while streaming.
+- `POST /plugins/<n>/show` on the plugin already on screen didn't restart its dwell, so the
+  rotation could switch away at once. Fixed in dbd138c.
