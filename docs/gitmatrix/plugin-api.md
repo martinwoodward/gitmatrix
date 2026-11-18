@@ -245,10 +245,15 @@ Plugins are trusted, cooperative code, not sandboxed. The runtime contains their
 - **Import error** → the plugin is quarantined at once. It's marked `!` in Menu → Plugins and selecting it retries.
 - **Exception in a hook** → logged and the frame is skipped. After **5 in a row** the plugin is quarantined
   and the next plugin shown ("<name> stopped"). Quarantine survives reboots (`config.quarantined`).
-- **Hang** (no frame for 8 s) → the hardware watchdog reboots the device. A scratch-register marker
-  records which plugin and hook was running, so on the next boot that plugin is quarantined and a message is shown.
-  Warm resets occasionally hang this board until it's unplugged ([phase0.md](phase0.md)), so the watchdog is
-  a last resort: if the widget stays dark, replug it.
+- **Hang** (a hook still running after **5 s**) → the hang watch, a soft timer, interrupts it with a
+  `KeyboardInterrupt`; the plugin is quarantined at once and the next one shown ("<name> hung and was
+  stopped"), with no reset. Don't catch bare `KeyboardInterrupt` in a plugin: the watch keeps interrupting
+  every second, and a plugin that swallows them all ends up at the hardware watchdog.
+- **Hang the hang watch can't stop** (a viper/`@native` loop never yields to it, or no frame for 8 s for any
+  other reason) → the hardware watchdog resets the device. A scratch-register marker records which plugin and
+  hook was running, so on the next boot that plugin is quarantined and a message is shown. Warm resets
+  occasionally hang this board ([phase0.md](phase0.md)): **if the widget stays dark, unplug it and plug it back in.**
+  Tasks started with `gitmatrix.create_task()` aren't watched; keep them awaiting.
 - **Boot loop** (3 boots without reaching 60 s healthy uptime), or the knob **held at power-on** → safe mode:
   no plugins load, and the menu works. Choosing a plugin from the menu leaves safe mode.
 - `update()` slower than 50 ms is logged once as a warning.

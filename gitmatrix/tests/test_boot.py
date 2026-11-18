@@ -93,3 +93,24 @@ def test_failing_boot_soft_resets_then_stops_instead_of_looping(root, monkeypatc
             _boot.run()
     _boot.run()  # returns to the REPL
     assert _persist.boot_count() == _boot.BOOT_LOOP_LIMIT
+
+
+def test_stray_hang_interrupt_soft_resets_instead_of_stopping(root, monkeypatch):
+    from gitmatrix import _hang
+
+    def interrupted_boot():
+        _hang.watch.tripped = True        # the hang watch fired outside a hook
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(_boot, "boot", interrupted_boot)
+    with pytest.raises(SystemExit, match="soft reboot"):
+        _boot.run()
+    assert _hang.watch.tripped is False
+
+
+def test_ctrl_c_still_stops_at_the_repl(root, monkeypatch):
+    def interrupted_boot():
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(_boot, "boot", interrupted_boot)
+    _boot.run()

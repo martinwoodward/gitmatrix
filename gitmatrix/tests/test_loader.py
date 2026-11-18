@@ -1,8 +1,11 @@
 # Fault containment: a broken plugin only ever takes itself out.
 
+import builtins
+
+import pytest
 from conftest import make_plugin, set_plugins
 
-from gitmatrix import _persist
+from gitmatrix import _hang, _persist
 
 GOOD = """
 frames = 0
@@ -101,6 +104,101 @@ def test_hung_plugin_is_quarantined_after_watchdog_reset(rig):
     assert "watchdog" in rt2.config.quarantined["hang"]
     assert "update" in rt2.config.quarantined["hang"]
     assert rt2.host.message is not None
+
+
+@pytest.fixture
+def hang_watch(rig):
+    """The hang watch as the device runs it, minus the timer: spin() advances
+    the clock and ticks the watch, whose interrupt raises KeyboardInterrupt."""
+    def interrupt():
+        raise KeyboardInterrupt
+
+    _hang.watch.interrupt = interrupt
+    _hang.watch.tripped = False
+
+    def spin():
+        _hang.watch.check(rig.clock.advance(_hang.CHECK_MS))
+
+    builtins.spin = spin
+    try:
+        yield _hang.watch
+    finally:
+        del builtins.spin
+        _hang.stop()
+        _hang.watch.interrupt = None
+
+
+HANGS = "def update():\n    while True:\n        spin()\n"
+
+
+def test_hung_update_is_stopped_and_quarantined_without_a_reset(rig, hang_watch):
+    make_plugin(rig.root, "good", GOOD)
+    make_plugin(rig.root, "hang", HANGS)
+    set_plugins(rig.root, ["hang", "good"])
+    rt = rig.boot()
+    assert rt.host.current.name == "hang"
+    rig.frames(1)                          # returns: no reset, no REPL
+    assert "hung in update" in rt.config.quarantined["hang"]
+    assert rt.host.message is not None and "hung" in rt.host.message[0]
+    assert hang_watch.tripped is False and hang_watch.started is None
+    rig.frames(400)                        # past the message and transition
+    assert rt.host.current.name == "good"
+    assert rt.loader.plugins["good"].module.frames >= 1
+
+
+def test_plugin_that_swallows_the_interrupt_is_interrupted_again(rig, hang_watch):
+    code = """def update():
+    n = 0
+    while True:
+        try:
+            while True:
+                spin()
+        except KeyboardInterrupt:
+            n += 1
+"""
+    make_plugin(rig.root, "stubborn", code)
+    set_plugins(rig.root, ["stubborn"])
+    rig.boot()
+    calls = []
+    real = hang_watch.interrupt
+
+    def bounded():
+        calls.append(1)
+        if len(calls) > 3:
+            raise SystemExit("hardware watchdog")    # what the device falls back to
+        real()
+
+    hang_watch.interrupt = bounded
+    rig.frames(1)
+    assert len(calls) > 1
+
+
+def test_hung_import_is_quarantined(rig, hang_watch):
+    make_plugin(rig.root, "good", GOOD)
+    make_plugin(rig.root, "slow", "while True:\n    spin()\n")
+    set_plugins(rig.root, ["slow", "good"])
+    rt = rig.boot()
+    assert "hung in import" in rt.config.quarantined["slow"]
+    assert rt.host.current.name == "good"
+
+
+def test_ctrl_c_in_a_plugin_still_reaches_the_repl(rig, hang_watch):
+    make_plugin(rig.root, "c", "def update():\n    raise KeyboardInterrupt\n")
+    set_plugins(rig.root, ["c"])
+    rig.boot()
+    with pytest.raises(KeyboardInterrupt):
+        rig.frames(1)
+    assert rig.rt.config.quarantined == {}
+
+
+def test_hang_watch_is_quiet_for_quick_hooks(rig, hang_watch):
+    make_plugin(rig.root, "good", GOOD)
+    set_plugins(rig.root, ["good"])
+    rt = rig.boot()
+    rig.frames(3)
+    hang_watch.check(rig.clock.advance(_hang.HANG_MS * 2))   # between hooks
+    assert hang_watch.tripped is False
+    assert rt.config.quarantined == {}
 
 
 def test_marker_ignored_without_watchdog_reset(rig):

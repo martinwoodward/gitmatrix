@@ -35,6 +35,7 @@ gitmatrix/
       _sounds    built-in/custom sounds, uploads, I2S playback
       _png       PNG size checks, fit to 7 rows, decode
       _config    /config.py load / migrate / save-in-place
+      _hang      hang watch: a soft timer interrupts a plugin hook that runs > 5 s
       _persist   crash marker + boot counter (machine.mem_backup()[0..1]), soft-reset reboot
       _wifi      STA / setup AP / fallback AP state machine, mDNS name, scans, captive DNS
       _mqtt      optional async MQTT client + Home Assistant discovery (off by default)
@@ -209,7 +210,13 @@ every device file with the real 1.29 compiler; without it those cases are skippe
 
 - Hold the knob while powering on, or crash 3 times before reaching 60 s of uptime: the
   device boots with no plugins, and the menu still works.
-- A plugin that hangs trips the 8 s watchdog. It's quarantined on the next boot.
+- A plugin hook that runs for more than 5 s is interrupted by the hang watch (a soft
+  timer that schedules a `KeyboardInterrupt`), quarantined straight away and the display
+  moves on, with no reset. A plugin stuck in a viper/native loop can't be interrupted, so
+  the 8 s hardware watchdog stays as the last resort: it warm-resets, and the next boot
+  quarantines the plugin it named. That warm reset hangs about one time in three: **if the
+  display stays dark after a plugin hang, unplug the widget and plug it back in.**
+  Background tasks a plugin starts with `gitmatrix.create_task` are not watched.
 - Warm resets are avoided: on this board `machine.reset()`, a watchdog reset or
   `picotool reboot` hangs the whole chip about one time in three until it is unplugged
   ([phase0.md](../docs/gitmatrix/phase0.md)). Settings, MQTT and plugin changes apply in

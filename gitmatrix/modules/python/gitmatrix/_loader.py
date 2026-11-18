@@ -7,12 +7,15 @@
 #   * before each hook a crash marker naming the plugin and hook goes into a
 #     scratch register; if the watchdog fires mid-hook, the next boot reads it
 #     and quarantines that plugin (check_crash()).
+#   * a hook that runs past _hang.HANG_MS is interrupted by the hang watch
+#     (a KeyboardInterrupt from a soft timer) and quarantined in place, with no
+#     reset; the hardware watchdog is only the last resort for native loops.
 
 import json
 import os
 import sys
 
-from gitmatrix import _compat, _persist, _runtime
+from gitmatrix import _compat, _hang, _persist, _runtime
 
 MAX_FAILURES = 5
 SLOW_UPDATE_MS = 50
@@ -142,7 +145,8 @@ class PluginLoader:
         ok, module = self.guard(plugin, "import", _import, name)
         if not ok:
             self._drop_module(name)
-            self.quarantine(plugin, f"import failed: {plugin.last_error}")
+            if name not in self.config.get("quarantined", {}):     # else it hung
+                self.quarantine(plugin, f"import failed: {plugin.last_error}")
             return None
         plugin.module = module
         return plugin
@@ -165,10 +169,18 @@ class PluginLoader:
     def guard(self, plugin, hook, fn, *args):
         """Run fn(*args) as `plugin`'s `hook`. Returns (ok, result)."""
         _persist.mark(plugin.markers[hook])
+        prev = _runtime.current
         _runtime.current = plugin
         self.compositor.bind(plugin.surface)
+        token = _hang.watch.enter(hook)
+        hung = False
         try:
             result = fn(*args)
+        except KeyboardInterrupt:
+            if not _hang.watch.consume():
+                raise                       # a real Ctrl-C: back to the REPL
+            hung = True
+            self.record_failure(plugin, hook, RuntimeError(f"hung in {hook}"))
         except MemoryError as e:
             _compat.collect()
             self.record_failure(plugin, hook, e)
@@ -180,11 +192,23 @@ class PluginLoader:
             self.record_failure(plugin, hook, e)
             return False, None
         finally:
+            _hang.watch.leave(token)
             self.compositor.unbind()
-            _runtime.current = None
+            _runtime.current = prev
             _persist.clear_mark()
+        if hung:
+            self.stop_hung(plugin, hook)
+            return False, None
         plugin.failures = 0
         return True, result
+
+    def stop_hung(self, plugin, hook):
+        seconds = _hang.HANG_MS // 1000
+        plugin.last_error = f"hung in {hook} (stopped after {seconds} s)"
+        self.quarantine(plugin, plugin.last_error)
+        plugin.failures = 0                 # call() mustn't quarantine it again
+        if _runtime.host is not None:
+            _runtime.host.show_message(f"{plugin.title} hung and was stopped", 5000, 25)
 
     def call(self, plugin, hook, *args):
         """Call an optional hook. Missing hooks count as success."""

@@ -3,7 +3,7 @@
 import builtins
 
 import gitmatrix
-from gitmatrix import _audio, _compat, _events, _flash, _log, _notify, _persist, _runtime, _sounds, _state, _store
+from gitmatrix import _audio, _compat, _events, _flash, _hang, _log, _notify, _persist, _runtime, _sounds, _state, _store
 from gitmatrix._config import Config, load_firmware_config
 from gitmatrix._display import Compositor, DisplayProxy
 from gitmatrix._host import Host
@@ -108,6 +108,9 @@ def boot(input_=None, bt=None, network_=None):
     _runtime.audio = gitmatrix.audio
 
     rt.watchdog = _Watchdog(config.get("watchdog", True))
+    # stops a hung plugin hook without a reset; the watchdog is the last resort
+    if config.get("watchdog", True):
+        _hang.start()
     rt.store = _store.Store()
     rt.store.feed = rt.watchdog.feed
     rt.loader = loader = PluginLoader(config, rt.compositor, rt.watchdog.feed)
@@ -161,6 +164,7 @@ def housekeeping(rt, now):
 
 def shutdown(rt):
     """Back to the REPL (Ctrl-C / mpremote): stop the watchdog and save."""
+    _hang.stop()
     _persist.disable_watchdog()
     _persist.clear_all()
     try:
@@ -188,7 +192,12 @@ async def _sleep_ms(ms):
 async def _draw(rt):
     while True:
         t = _compat.ticks_ms()
-        rt.host.frame(t)
+        try:
+            rt.host.frame(t)
+        except KeyboardInterrupt:
+            # the hang watch fired just as a hook returned: harmless, carry on
+            if not _hang.watch.consume():
+                raise
         rt.watchdog.feed()
         spent = _compat.ticks_diff(_compat.ticks_ms(), t)
         await _sleep_ms(max(1, 16 - spent))
@@ -259,6 +268,13 @@ def run():
         rt = boot()
         asyncio.run(_main(rt))
     except KeyboardInterrupt:
+        if _hang.watch.consume():
+            # the hang watch fired outside a plugin hook (a web/MQTT task got
+            # it): restart cleanly rather than stop at the REPL
+            print("gitmatrix: interrupted by the hang watch, restarting")
+            _hang.stop()
+            _persist.reset(keep_boot=True)
+            return
         shutdown(rt)
         print("gitmatrix: stopped, watchdog off")
     except Exception as e:  # noqa: BLE001 - a host bug: reboot; repeated failures land in safe mode
