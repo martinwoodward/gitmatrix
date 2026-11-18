@@ -183,6 +183,24 @@ def _plugin_info(name):
         "errors": plugin.error_count if plugin is not None else 0,
         "last_error": plugin.last_error if plugin is not None else None,
         "slow": bool(plugin.slow) if plugin is not None else False,
+        **_store_info(name),
+    }
+
+
+def _store_info(name):
+    from gitmatrix import _loader, _store
+
+    manifest = _loader.read_manifest(name)
+    installed = _store.active()
+    store = _runtime.store
+    has_config = _compat.exists(_store.live_dir(name) + "/config.html")
+    return {
+        "version": manifest.get("version") if isinstance(manifest.get("version"), str) else None,
+        "installed": name in installed,
+        "builtin": name not in installed,
+        "update_available": bool(store is not None and store.update_available(name, installed)),
+        "has_settings": bool(manifest.get("settings")) or has_config,
+        "has_config_html": has_config,
     }
 
 
@@ -366,6 +384,247 @@ def plugin_unquarantine(_request, name):
         if host.current is None:
             host.step(1, _compat.ticks_ms())
     return _plugin_info(name)
+
+
+# ---- plugin store -----------------------------------------------------------
+
+def _store():
+    from gitmatrix import _store as store_mod
+
+    store = _runtime.store
+    if store is None:
+        store = store_mod.Store()
+    return store, store_mod
+
+
+@api("/store")
+def store_get(_request):
+    store, _ = _store()
+    return store.catalogue()
+
+
+@api("/store/refresh", ("POST",))
+def store_refresh(_request):
+    store, _ = _store()
+    wifi = _wifi_mgr()
+    if wifi is None or not wifi.connected():
+        return {"error": "not connected to the internet"}, 409
+    wait = store.refresh_wait_ms()
+    if store.refreshing or wait:
+        return {"refreshing": store.refreshing, "retry_ms": wait}, 429 if wait else 202
+    store.refreshing = True
+    spawn(store.refresh())
+    return {"refreshing": True}, 202
+
+
+@api("/store/install", ("GET", "POST"))
+def store_install(request):
+    store, store_mod = _store()
+    if request.method == "GET":
+        return {"install": store.progress}
+    name = str(_body(request)["name"])
+    if not _compat.valid_name(name):
+        raise ValueError("bad plugin name")
+    try:
+        progress = store.begin(name, _runtime.audio is not None and _runtime.audio.streaming())
+    except store_mod.StoreError as e:
+        return {"error": str(e)}, e.status
+    spawn(store.install(name))
+    return {"install": progress, "warning": store_mod.AUDIO_WARNING}, 202
+
+
+@api("/plugins/<name>/remove", ("POST",))
+def plugin_remove(request, name):
+    store, store_mod = _store()
+    keep = _body(request).get("keep_data", True)
+    try:
+        return store.remove(name, keep_data=_bool(keep))
+    except store_mod.StoreError as e:
+        return {"error": str(e)}, e.status
+
+
+# ---- plugin settings --------------------------------------------------------
+
+def _plugin_settings_reply(name):
+    from gitmatrix import _state
+
+    s = _state.settings(name)
+    schema = _state.public_schema(s.schema)
+    values = s.redacted()
+    for field in schema:
+        if field["type"] == "secret":
+            field["set"] = bool(values.get(field["key"]))
+    info = _store_info(name)
+    return {
+        "name": name,
+        "title": _plugin_info(name)["title"],
+        "schema": schema,
+        "values": {k: v for k, v in values.items() if not s.is_secret(k)},
+        "has_config_html": info["has_config_html"],
+        "config_url": f"/config?plugin={name}" if info["has_config_html"] else None,
+    }
+
+
+def _reload_plugin(name):
+    """Settings changed: call on_settings, else reload the module."""
+    loader = _runtime.loader
+    host = _host()
+    if loader is None:
+        return
+    plugin = loader.plugins.get(name)
+    if plugin is None or plugin.module is None:
+        return
+    if plugin.hook("on_settings") is not None:
+        loader.call(plugin, "on_settings")
+        return
+    showing = host is not None and host.current is plugin
+    if showing:
+        host._enter(None, _compat.ticks_ms())  # noqa: SLF001 - on_hide, then reload
+    loader.unload(name)
+    if loader.load(name) is not None and showing:
+        host.show(name)
+    elif showing:
+        host.step(1, _compat.ticks_ms())
+
+
+@api("/plugins/<name>/settings", ("GET", "POST"))
+def plugin_settings(request, name):
+    name, err = _known(name)
+    if err:
+        return err
+    from gitmatrix import _state
+
+    if request.method == "POST":
+        _state.settings(name).update(_body(request), strict=True)
+        _reload_plugin(name)
+    return _plugin_settings_reply(name)
+
+
+# ---- Art Matrix config.html pages (/config?plugin=name) ---------------------
+#
+# As on Art Matrix: GET renders the plugin's config.html with `plugin` (its
+# name) and `placeholder` (its module) in scope; POST passes the form to the
+# plugin's process_config(form), or saves it as /data/<name>/config.json for
+# plugin_config(). A form field "reset" deletes the saved config.
+
+def _escape(text):
+    return (str(text).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            .replace('"', "&quot;").replace("'", "&#39;"))
+
+
+def render(template, params):
+    """{{ expr }} from phew's templates, synchronously; plain names are escaped."""
+    out = []
+    pos = 0
+    while True:
+        start = template.find("{{", pos)
+        if start < 0:
+            out.append(template[pos:])
+            return "".join(out)
+        end = template.find("}}", start + 2)
+        if end < 0:
+            out.append(template[pos:])
+            return "".join(out)
+        out.append(template[pos:start])
+        expr = template[start + 2:end].strip()
+        try:
+            if expr in params:
+                value = _escape(params[expr])
+            else:
+                value = eval(expr, {}, params)  # noqa: S307 - the plugin's own template, as phew
+                value = "" if value is None else str(value)
+        except Exception as e:  # noqa: BLE001 - a broken template shouldn't take the page down
+            _log.log(f"config: {{{{ {expr} }}}} failed: {_compat.error_text(e)}")
+            value = ""
+        out.append(value)
+        pos = end + 2
+
+
+_CONFIG_PAGE = """<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{title} - GitMatrix</title><link rel="stylesheet" href="/static/app.css"></head>
+<body><header class="top"><a class="brand" href="/">GitMatrix</a>
+<nav><a href="/">Home</a><a href="/discover.html">Discover</a><a href="/settings.html">Settings</a></nav></header>
+<main><p><a href="/plugin.html?name={name}">&larr; {title}</a></p>
+<section class="card config-html">{body}</section></main>
+<div id="toast" class="toast" hidden></div><script src="/static/app.js"></script></body></html>"""
+
+
+def _module_for(name):
+    """The plugin's module: the loaded one, else a throwaway import."""
+    loader = _runtime.loader
+    plugin = loader.plugins.get(name) if loader is not None else None
+    if plugin is not None and plugin.module is not None:
+        return plugin.module, False
+    from gitmatrix import _loader
+
+    try:
+        return _loader._import(name), True  # noqa: SLF001
+    except Exception as e:  # noqa: BLE001 - render without it
+        _log.log(f"config: import {name} failed {_compat.error_text(e)}")
+        return None, False
+
+
+def _drop_module(name):
+    import sys
+
+    from gitmatrix import _loader
+
+    sys.modules.pop(_loader._module_key(name), None)  # noqa: SLF001
+
+
+def config_page(request):
+    if not authorized(request) and request.method != "GET":
+        return _response("Unauthorized", 401, "text/plain")
+    name = request.query.get("plugin", "")
+    from gitmatrix import _store
+
+    if not _compat.valid_name(name) or name not in _config().get("plugins", []):
+        return _response("No such plugin", 404, "text/plain")
+    path = _store.live_dir(name) + "/config.html"
+    if request.method == "POST":
+        if not authorized(request):
+            return _response("Unauthorized", 401, "text/plain")
+        form = request.form if isinstance(request.form, dict) else {}
+        module, temporary = _module_for(name)
+        try:
+            if "reset" in form:
+                _compat.remove_tree(_runtime.data_dir(name) + "/config.json")
+            elif module is not None and hasattr(module, "process_config"):
+                module.process_config(form)
+            else:
+                from gitmatrix import _state
+
+                _state._write_json(_runtime.data_dir(name) + "/config.json", form)  # noqa: SLF001
+        except Exception as e:  # noqa: BLE001 - the plugin's own code
+            _log.log(f"config: {name} process_config failed {_compat.error_text(e)}")
+            return _response(f"Couldn't save: {_escape(_compat.error_text(e))}", 400, "text/plain")
+        finally:
+            if temporary:
+                _drop_module(name)
+        _reload_plugin(name)
+        return _response("", 303, "text/plain", {"Location": f"/config?plugin={name}"})
+    try:
+        with open(path) as f:
+            template = f.read()
+    except OSError:
+        return _response("This plugin has no config page", 404, "text/plain")
+    module, temporary = _module_for(name)
+    try:
+        body = render(template, {"plugin": name, "placeholder": module})
+    finally:
+        if temporary:
+            _drop_module(name)
+    title = _escape(_plugin_info(name)["title"])
+    headers = {"Cache-Control": "no-store"}
+    token = _token()
+    if token is not None:
+        headers["Set-Cookie"] = _set_cookie(token)
+    return _response(_CONFIG_PAGE.format(title=title, name=name, body=body), 200, "text/html", headers)
+
+
+_ROUTES.append(("/config", config_page, ["GET", "POST"]))
 
 
 # ---- settings ---------------------------------------------------------------

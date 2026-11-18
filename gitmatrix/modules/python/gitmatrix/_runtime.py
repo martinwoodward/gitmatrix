@@ -11,6 +11,7 @@ audio = None       # the Audio analyser
 current = None     # Plugin whose hook is running right now (or None for the host)
 wifi = None        # the WiFi manager (gitmatrix._wifi.WiFi)
 firmware = {}      # /gitmatrix_config.py values (AP_PASSWORD, PLUGIN_REPO, ...)
+store = None      # the plugin Store (gitmatrix._store.Store)
 reboot_at = None   # ticks_ms when housekeeping should reboot (after a web request)
 
 

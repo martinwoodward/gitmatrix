@@ -1,6 +1,8 @@
 # Art Matrix compatible plugin_config(): values saved from a plugin's config.html
 # form, typed by the defaults. A bool is True when its key was submitted (an
 # unticked checkbox sends nothing); a tuple default reads "#rrggbb" as (r, g, b).
+# GitMatrix saves the form to /data/<name>/config.json so it survives updates and
+# can be kept on uninstall; a config.json shipped in the plugin folder still counts.
 
 import json
 
@@ -26,12 +28,18 @@ def _coerce(default, value):
     return value
 
 
+def _saved(name):
+    for path in (f"{_root()}/data/{name}/config.json", f"{_root()}/lib/plugins/{name}/config.json"):
+        try:
+            with open(path) as f:
+                return json.load(f)
+        except (OSError, ValueError):
+            pass
+    return None
+
+
 def plugin_config(name, defaults):
-    try:
-        with open(f"{_root()}/lib/plugins/{name}/config.json") as f:
-            saved = json.load(f)
-    except (OSError, ValueError):
-        return dict(defaults)
+    saved = _saved(name)
     if not isinstance(saved, dict):
         return dict(defaults)
 

@@ -205,3 +205,40 @@ main.py
 - [ ] Save & reboot → watchdog reboot → joins the new network.
 - [ ] `bt_audio.set_pairable` exists (else the toggle only changes config).
 - [ ] Free RAM with phew loaded, and page load speed from flash.
+
+## Phase 3 (plugin store): resume here (WIP)
+
+**Done (host tests still 102/102, ruff clean, but no new tests yet):**
+- `fetch.py` is vendored from Art Matrix, with TLS `CERT_NONE`.
+- `_state` settings schema: text/url/secret/number/int/color/select/bool, plus `check()`, `public_schema()` and `update(strict=True)`. `forget(delete=True)` also deletes `/secrets/<name>.json`.
+- `plugin_config` reads `/data/<name>/config.json` first.
+- `_store.py`:
+  - index fetch, cache in `/index-cache.json`, 15-minute refresh, `parse_index`/`parse_manifest`;
+  - transactional install/update/remove through `/.install` staging, a journal, `active.json`, rollback and boot `reconcile()`.
+  - Plugins stay at the stable `/lib/plugins/<name>/` path, a deliberate deviation from `<name>@<ver>` dirs: Art Matrix plugins hardcode that path.
+- `_boot`: `reconcile()`, `Store`, and the `_store_task` refresh loop.
+- `_web`:
+  - `GET /api/v1/store`; `POST /api/v1/store/refresh`; `GET`/`POST /api/v1/store/install`;
+  - `POST /api/v1/plugins/<n>/remove`; `GET`/`POST /api/v1/plugins/<n>/settings` (secrets write-only);
+  - the Art Matrix `/config?plugin=` GET/POST page with a sync `{{ }}` renderer;
+  - extra `_plugin_info` fields.
+
+**Remaining:**
+1. **Safe-write funnel (phase 0 finding: a flash write while A2DP streams can hang the device).** Add `gitmatrix/_flash.py`:
+   - `set_bt(bt)`, `streaming()`, `can_write()`, `check()` (raises `FlashBusy`), `pause()`/`resume()`/`paused()`. Pausing runs `bt.link_keys()` → `deinit()` → writes → `load_link_keys` + `init(name="GitMatrix")`, then re-applies volume/pairable.
+   - Install a guard hook in `_compat.write_atomic`/`makedirs`/`remove_tree`.
+   - **Background writes defer:** state flush (drop `MAX_DEFER_MS` and update `test_state.py:44`), `config.save` in housekeeping/boot//settings, `_audio.save_link_keys`, and the store index cache (pending, flushed from housekeeping).
+   - **User writes need `pause_audio`, else 409 with "Bluetooth audio will disconnect; reconnect your device":** plugin settings POST, remove, `/config` POST and install.
+   - **Install with `queue`** waits until playback stops: download to RAM, then wait or pause before the write burst.
+   - **WiFi save/forget, `reboot()` and the crash path** pause implicitly.
+   - Move `reconcile()` before `_audio.start` in `boot()`.
+   - Tests for the defer and pause paths.
+2. HTML:
+   - `discover.html`: client-side search/category filter, cards, install progress, and the audio pause/queue choice;
+   - new `plugin.html`: auto settings form, secret Replace/Clear, Remove keep/delete data;
+   - Home: update badges;
+   - `app.js`: `form[data-autosave]`, with a 409 → confirm → `pause_audio` retry;
+   - `app.css`: cards.
+3. Tests: `tests/test_store.py` (index parse/cache, install/update/remove, crash-mid-install reconcile, rollback), plus settings schema/redaction and API handler tests.
+4. Docs: `plan.md` §4/§5 (phase-3 on-device checklist), `plugin-api.md` (manifest + settings schema), `README.md`; plus the `tools/deploy.py` docstring.
+5. Plugins repo `martinwoodward/gitmatrix-plugins`: **not created yet** (nothing pushed). Contents: README, `ci/generate_packages.py`, workflow, 2–3 example plugins, `index.json`.

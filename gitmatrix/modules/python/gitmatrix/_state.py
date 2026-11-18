@@ -158,39 +158,109 @@ def forget(name, delete=False):
         s.flush(force=True)
     if delete:
         _compat.remove_tree(_runtime.data_dir(name))
+        _compat.remove_tree(_runtime.secrets_path(name))
 
 
 # ---- settings ---------------------------------------------------------------
+#
+# Field types: text/string, url, secret, number/float, int, color, select/choice
+# and bool, each with "key", "label" and "default"; number/int take "min"/"max",
+# select takes "options" (values, [value, label] pairs or {"value", "label"}).
 
 _TRUE = ("1", "true", "yes", "on")
+TEXT_MAX = 512
+TYPES = ("text", "string", "url", "secret", "number", "float", "int", "color", "select", "choice", "bool")
+
+
+def options(field):
+    """The values a select field allows, as [(value, label)]."""
+    out = []
+    for o in field.get("options", field.get("choices", [])):
+        if isinstance(o, dict):
+            out.append((o.get("value"), str(o.get("label", o.get("value")))))
+        elif isinstance(o, (list, tuple)) and o:
+            out.append((o[0], str(o[1]) if len(o) > 1 else str(o[0])))
+        else:
+            out.append((o, str(o)))
+    return out
+
+
+def _color(value):
+    text = str(value).strip().lower()
+    if not text.startswith("#"):
+        text = "#" + text
+    if len(text) != 7:
+        raise ValueError("colour must be #rrggbb")
+    int(text[1:], 16)
+    return text
+
+
+def check(field, value):
+    """Validate and normalise one value; raises ValueError saying what's wrong."""
+    kind = field.get("type", "string")
+    if kind == "bool":
+        if isinstance(value, str):
+            return value.strip().lower() in _TRUE
+        return bool(value)
+    if kind in ("int", "float", "number"):
+        if isinstance(value, bool):
+            raise ValueError("must be a number")
+        number = float(value)
+        if number != number:  # NaN
+            raise ValueError("must be a number")
+        if kind == "int" or (number == int(number) and isinstance(field.get("default"), int)):
+            number = int(number)
+        if "min" in field and number < field["min"]:
+            number = field["min"]
+        if "max" in field and number > field["max"]:
+            number = field["max"]
+        return number
+    if kind in ("select", "choice"):
+        for v, _label in options(field):
+            if v == value or str(v) == str(value):
+                return v
+        raise ValueError("not one of the options")
+    if kind == "color":
+        return _color(value)
+    text = str(value)
+    if len(text) > TEXT_MAX:
+        raise ValueError(f"longer than {TEXT_MAX} characters")
+    if kind == "url" and text and not (text.startswith("http://") or text.startswith("https://")):  # noqa: PIE810 - MicroPython takes no tuple
+        raise ValueError("must start with http:// or https://")
+    return text
 
 
 def coerce(field, value):
-    kind = field.get("type", "string")
+    """check(), falling back to the field's default for a bad value."""
     if value is None:
         return None
     try:
-        if kind == "bool":
-            if isinstance(value, str):
-                return value.strip().lower() in _TRUE
-            return bool(value)
-        if kind == "int":
-            value = int(value)
-        elif kind in ("float", "number"):
-            value = float(value)
-        elif kind == "choice":
-            choices = [c[0] if isinstance(c, (list, tuple)) else c for c in field.get("choices", [])]
-            return value if value in choices else field.get("default")
-        else:
-            value = str(value)
+        return check(field, value)
     except (TypeError, ValueError):
         return field.get("default")
-    if kind in ("int", "float", "number"):
-        if "min" in field and value < field["min"]:
-            value = field["min"]
-        if "max" in field and value > field["max"]:
-            value = field["max"]
-    return value
+
+
+def public_schema(schema):
+    """The schema as the web UI needs it: typed, labelled, options listed."""
+    out = []
+    for f in schema:
+        if not isinstance(f, dict) or not isinstance(f.get("key"), str):
+            continue
+        kind = f.get("type", "string")
+        item = {
+            "key": f["key"],
+            "type": kind if kind in TYPES else "text",
+            "label": str(f.get("label", f["key"])),
+        }
+        if kind != "secret":
+            item["default"] = f.get("default")
+        for extra in ("min", "max", "step", "help", "placeholder"):
+            if extra in f:
+                item[extra] = f[extra]
+        if kind in ("select", "choice"):
+            item["options"] = [{"value": v, "label": label} for v, label in options(f)]
+        out.append(item)
+    return out
 
 
 def manifest(name):
@@ -245,8 +315,9 @@ class Settings:
         """For UIs/APIs: secrets show only whether they are set."""
         return {k: (bool(v) if self.is_secret(k) else v) for k, v in self._values.items()}
 
-    def update(self, values):
-        """Validate and persist new values (unknown keys ignored, "" clears a secret)."""
+    def update(self, values, strict=False):
+        """Validate and persist new values (unknown keys ignored, "" or None clears
+        a secret). strict raises ValueError naming the first bad field, saving nothing."""
         stored = _read_json(self.values_path, {})
         secrets = _read_json(self.secrets_path, {})
         secrets_changed = False
@@ -256,10 +327,19 @@ class Settings:
                 continue
             if field.get("type") == "secret":
                 if value:
+                    if strict and len(str(value)) > TEXT_MAX:
+                        raise ValueError(f"{key}: longer than {TEXT_MAX} characters")
                     secrets[key] = str(value)
                 else:
                     secrets.pop(key, None)
                 secrets_changed = True
+            elif strict:
+                try:
+                    stored[key] = None if value is None else check(field, value)
+                except (TypeError, ValueError) as e:
+                    raise ValueError(f"{field.get('label', key)}: {e}") from None
+                if stored[key] is None:
+                    stored.pop(key)
             else:
                 stored[key] = coerce(field, value)
         _write_json(self.values_path, stored)

@@ -3,7 +3,7 @@
 import builtins
 
 import gitmatrix
-from gitmatrix import _audio, _compat, _log, _persist, _runtime, _state
+from gitmatrix import _audio, _compat, _log, _persist, _runtime, _state, _store
 from gitmatrix._config import Config, load_firmware_config
 from gitmatrix._display import Compositor, DisplayProxy
 from gitmatrix._host import Host
@@ -21,6 +21,7 @@ WATCHDOG_MS = 8000
 HEALTHY_MS = 60000
 BOOT_LOOP_LIMIT = 3
 HOUSEKEEPING_MS = 2000
+STORE_TICK_MS = 5000
 
 
 class _Watchdog:
@@ -54,6 +55,7 @@ class Runtime:
         self.host = None
         self.watchdog = None
         self.wifi = None
+        self.store = None
         self.booted = 0
         self.healthy = False
 
@@ -94,6 +96,13 @@ def boot(input_=None, bt=None, network_=None):
     _runtime.audio = gitmatrix.audio
 
     rt.watchdog = _Watchdog(config.get("watchdog", True))
+    # finish or undo a plugin install a power cut interrupted, before anything loads
+    try:
+        _store.reconcile()
+    except Exception as e:  # noqa: BLE001 - a muddled store must not stop the display
+        _log.log(f"store: reconcile failed {_compat.error_text(e)}")
+    rt.store = _store.Store()
+    rt.store.feed = rt.watchdog.feed
     rt.loader = loader = PluginLoader(config, rt.compositor, rt.watchdog.feed)
     loader.sync_config()
     crashed = loader.check_crash(was_watchdog)
@@ -186,12 +195,25 @@ async def _wifi(rt):
             _log.log(f"wifi: {_compat.error_text(e)}")
 
 
+async def _store_task(rt):
+    """Keep the plugin index fresh while online (Discover reads the cache)."""
+    while True:
+        await _sleep_ms(STORE_TICK_MS)
+        store = rt.store
+        try:
+            if store is not None and rt.wifi.connected() and store.due(_compat.ticks_ms()):
+                await store.refresh()
+        except Exception as e:  # noqa: BLE001 - the store is optional
+            _log.log(f"store: {_compat.error_text(e)}")
+
+
 async def _main(rt):
     import asyncio
 
     asyncio.create_task(_housekeeping(rt))
     if rt.wifi is not None and rt.wifi.net is not None:
         asyncio.create_task(_wifi(rt))
+        asyncio.create_task(_store_task(rt))
         try:
             from gitmatrix import _web
 
