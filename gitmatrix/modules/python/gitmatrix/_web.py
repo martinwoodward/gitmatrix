@@ -494,11 +494,9 @@ async def _do_scan():
     try:
         import asyncio
 
-        # let the 202 go out before the radio goes busy
+        # let the 202 go out before the radio (and this loop) goes busy
         await asyncio.sleep(0.2)
-        _feed()
-        _wifi_mgr().scan()
-        _feed()
+        _wifi_mgr().scan(_feed)
     finally:
         _scan_task = None
 
@@ -510,20 +508,25 @@ def _feed():
 
 @api("/wifi/scan", ("POST",))
 def wifi_scan(_request):
+    # WLAN.scan() can't yield (see _wifi), so rescans are explicit and rate-limited
     global _scan_task
     wifi = _wifi_mgr()
     if wifi is None or wifi.net is None:
         return error(503, "WiFi unavailable")
+    if _scan_task is not None or wifi.scanning:
+        return {"scanning": True}, 202
+    wait = wifi.scan_wait_ms()
+    if wait:
+        return reply({"error": f"Just scanned: try again in {(wait + 999) // 1000} s", "retry_ms": wait}, 429)
     out = {"scanning": True}
     if _bt_status()["streaming"]:
         out["warning"] = SCAN_WARNING
-    if _scan_task is None and not wifi.scanning:
-        wifi.scanning = True
-        try:
-            _scan_task = spawn(_do_scan())
-        except Exception:
-            wifi.scanning = False
-            raise
+    wifi.scanning = True
+    try:
+        _scan_task = spawn(_do_scan())
+    except Exception:
+        wifi.scanning = False
+        raise
     return out, 202
 
 

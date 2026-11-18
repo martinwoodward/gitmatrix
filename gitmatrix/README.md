@@ -62,7 +62,10 @@ is left alone.
 - The UI and API are open on the LAN, like Art Matrix. Set an **API token** in Settings
   and `/api/v1/*` then needs `Authorization: Bearer <token>`; pages served by the device
   set an `HttpOnly` cookie so the browser UI keeps working.
-- Scanning while a phone is streaming to the speaker can make the audio stutter.
+- Scanning while a phone is streaming to the speaker can make the audio stutter. The
+  CYW43 scan can't run in the background, so setup mode scans once at boot (before
+  anything else runs) and **Scan** in the UI pauses the display for a second or two;
+  rescans are limited to one per 15 s.
 
 API (JSON, `/api/v1/`; phases 5/6 extend it):
 
@@ -75,7 +78,7 @@ API (JSON, `/api/v1/`; phases 5/6 extend it):
 | `POST plugins/<name>/show`, `enable`, `disable`, `unquarantine` | |
 | `GET/POST settings` | delay, hostname, time zone, API token (write-only) |
 | `GET/POST wifi`, `POST wifi/forget` | status; save `{ssid, password}` and reboot |
-| `POST wifi/scan` (202), `GET wifi/networks` | background scan, results |
+| `POST wifi/scan` (202, 429 within 15 s of the last), `GET wifi/networks` | rescan, results |
 | `GET bluetooth`, `POST bluetooth/forget`, `bluetooth/pairable` | |
 | `GET system`, `GET system/logs`, `POST system/reboot` | |
 

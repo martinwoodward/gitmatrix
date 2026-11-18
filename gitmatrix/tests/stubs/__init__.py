@@ -274,6 +274,7 @@ class WLAN:
         if not self.on:
             raise OSError("interface not active")
         self.scans += 1
+        Timer.fire_all()         # the radio is busy: only scheduled callbacks run
         return list(self.found)
 
 
@@ -315,6 +316,33 @@ class WDT:
         self.feeds += 1
 
 
+class Timer:
+    """Soft virtual timer. On the device its callback is scheduled, so it still
+    runs inside blocking C waits such as WLAN.scan(); fire_all() simulates that."""
+
+    PERIODIC = 1
+    ONE_SHOT = 0
+    live = []
+
+    def __init__(self, id=-1):  # noqa: A002
+        self.callback = None
+        self.period = None
+
+    def init(self, mode=PERIODIC, period=-1, callback=None):
+        self.period = period
+        self.callback = callback
+        Timer.live.append(self)
+
+    def deinit(self):
+        if self in Timer.live:
+            Timer.live.remove(self)
+
+    @classmethod
+    def fire_all(cls):
+        for t in list(cls.live):
+            t.callback(t)
+
+
 class Pin:
     IN = 0
     PULL_UP = 1
@@ -353,6 +381,7 @@ def install():
     machine.mem32 = Mem32()
     machine.WDT = WDT
     machine.Pin = Pin
+    machine.Timer = Timer
     machine.WDT_RESET = 3
     machine.PWRON_RESET = 1
     machine.cause = 1

@@ -9,7 +9,18 @@
 #
 # Everything here is non-blocking (wlan.connect() returns at once) and driven by
 # tick() from a small asyncio task, so the display and Bluetooth audio carry on.
-# The one slow call is scan() (~2 s on the CYW43), which only runs when asked.
+#
+# The exception is scan(). MicroPython's CYW43 WLAN.scan() is one C call that
+# spins until the radio finishes (~1-3 s, capped at 10 s); it has no async or
+# per-channel form, and core1 belongs to bt_audio so it can't go on a thread.
+# So it is kept off the event loop where possible and bounded where not:
+#   * setup mode scans once at boot, before the loop starts (prescan()), so the
+#     provisioning page has networks without stalling anything;
+#   * a rescan from the web UI is explicit, at most one per SCAN_COOLDOWN_MS,
+#     and a soft machine.Timer keeps the watchdog fed while it runs (scheduled
+#     callbacks still run inside the CYW43 wait loop), so the 10 s worst case
+#     can't trip the 8 s watchdog. The C-level Bluetooth stack keeps being
+#     polled during the wait; only Python tasks (display, web) pause.
 
 from gitmatrix import _compat, _log
 
@@ -24,6 +35,8 @@ FALLBACK_MS = 60000                      # configured network failing this long:
 RETRY_MS = (15000, 30000, 60000)         # between connect attempts, last one repeats
 TICK_MS = 500
 SCAN_MAX = 30
+SCAN_COOLDOWN_MS = 15000                 # between web-triggered rescans
+SCAN_FEED_MS = 1000                      # watchdog keepalive period during a scan
 MIN_AP_PASSWORD = 8                      # WPA2 needs 8-63 characters
 
 DEFAULT_AP_SSID = "GitMatrix"
@@ -57,6 +70,22 @@ def _start_dns(ip):
     from phew import dns
 
     dns.run_catchall(ip)
+
+
+def _keepalive(feed):
+    """A soft periodic Timer calling feed(); None if there's no Timer."""
+    if feed is None:
+        return None
+    feed()
+    try:
+        from machine import Timer
+
+        t = Timer(-1)
+        t.init(mode=Timer.PERIODIC, period=SCAN_FEED_MS, callback=lambda _t: feed())
+        return t
+    except (ImportError, AttributeError, TypeError, ValueError, OSError) as e:
+        _log.log(f"wifi: no scan keepalive ({_compat.error_text(e)})")
+        return None
 
 
 class WiFi:
@@ -204,11 +233,28 @@ class WiFi:
 
     # ---- scanning -----------------------------------------------------------
 
-    def scan(self):
-        """Blocking (~2 s). Call from a task; the caller feeds the watchdog."""
+    def scan_wait_ms(self, now=None):
+        """How long until another scan is allowed (0 = now)."""
+        if self.scanned_at is None:
+            return 0
+        now = _compat.ticks_ms() if now is None else now
+        return max(0, SCAN_COOLDOWN_MS - _compat.ticks_diff(now, self.scanned_at))
+
+    def prescan(self, feed=None):
+        """Setup mode at boot, before the event loop runs: fill the network list
+        for the provisioning page so nobody has to scan from inside the loop."""
+        if self.mode != SETUP:
+            return []
+        _log.log("wifi: scanning for the setup page")
+        return self.scan(feed)
+
+    def scan(self, feed=None):
+        """Blocking (~1-3 s, 10 s cap in the CYW43 driver). Pass the watchdog's
+        feed() and it is called every SCAN_FEED_MS for the duration."""
         if self.net is None:
             return []
         self.scanning = True
+        keepalive = _keepalive(feed)
         try:
             if self.sta is None:
                 self.sta = self.net.WLAN(self.net.STA_IF)
@@ -220,6 +266,10 @@ class WiFi:
             _log.log(f"wifi: scan failed {_compat.error_text(e)}")
             raw = []
         finally:
+            if keepalive is not None:
+                keepalive.deinit()
+            if feed is not None:
+                feed()
             self.scanning = False
         best = {}
         for entry in raw:

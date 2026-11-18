@@ -85,7 +85,7 @@ main.py
 - **All hooks guarded**: import, `update()`, `process_config()`, settings callbacks, optional `on_show()`, `on_hide()`, `on_notify(data)`, `on_input(evt)`. Errors recorded for the web UI; 5 consecutive failures → quarantine; `MemoryError` → `gc.collect()` + skip frame.
 - **Crash marker**: before each plugin hook, write plugin index + hook id into an RP2350 watchdog/POWMAN **scratch register** (survives watchdog reset, zero flash wear); clear on return. After a WDT reset with the marker set → quarantine that plugin and tell the user.
 - **Boot-loop guard**: scratch counter incremented early in boot, cleared after 60 s healthy; 3 → safe mode.
-- **Watchdog** 8 s, fed by `draw()`; host blocking operations (DNS, NTP, flash, scans) have bounded timeouts and feed it before/after.
+- **Watchdog** 8 s, fed by `draw()`; host blocking operations (DNS, NTP, flash, scans) have bounded timeouts and feed it before/after (WiFi scans also keep it fed mid-call with a soft `machine.Timer`).
 - **Slow plugins**: track `update()` time; persistently over budget → flagged "slow" in UI, optionally auto-skipped. `time.sleep` inside plugin hooks is warned (not enforced).
 - **Resource ownership**: `gitmatrix.create_task()`, `gitmatrix.fetch()` and timers are tracked per plugin and cancelled/closed on hide (optional), quarantine or unload. Plain `asyncio.create_task` documented as unsupported.
 - **Forced plugins** (notifications/API) still respect quarantine.
@@ -127,7 +127,7 @@ main.py
 - No WiFi configured → AP `GitMatrix` at 192.168.4.1 + captive DNS. AP is **WPA2** with a default password **`monalisa`** (user asked for `mona`; WPA2 requires 8–63 chars; changeable in `/gitmatrix_config.py`), shown on the display and in the menu's WiFi screen. AP turned off once STA connects. If the configured network fails for **1 min**, the AP starts as well while STA keeps retrying; it stops once STA connects.
 - Pages: Home (now showing, reorder/enable/disable, delay, Show now), Discover, Plugin settings, Notifications (test sender), Settings (brightness, volume, hostname, timezone, optional API token, alert sound on/off + quiet-hours schedule), Sounds (built-ins, upload/delete custom), WiFi (scan → pick → password → save → reboot), Bluetooth, System (usage, version, reboot, logs, plugin errors/quarantine).
 - **Scan while streaming** briefly starves A2DP → UI warns "audio may stutter" (or defer until paused).
-- **Implemented (phase 2)**: `gitmatrix._wifi` (state machine ticked every 500 ms from the asyncio loop; scans run in a spawned task; `wifi.py` is an Art Matrix-compatible shim over it), `gitmatrix._web` (phew routes, JSON API under `/api/v1/`, static pages from `/html`, captive 302 to `/wifi.html` in AP mode), `gitmatrix._log` (RAM ring, never written to flash). Saving WiFi schedules a watchdog reboot (`gitmatrix.reboot()`), never `machine.reset()`. Discover, Plugin settings, Notifications and Sounds pages are placeholders. Not yet done: *hold 10 s → WiFi reset* (§2.2); use Forget network in the UI, or clear `wifi_ssid` in `/config.py`.
+- **Implemented (phase 2)**: `gitmatrix._wifi` (state machine ticked every 500 ms from the asyncio loop; `WLAN.scan()` can't yield (one C call, up to 10 s, no async/per-channel form; core1 belongs to `bt_audio` so no thread), so it's isolated: setup mode scans once at boot before the event loop starts, and web rescans are explicit, rate-limited to one per 15 s (429 otherwise) and keep the watchdog fed via a soft Timer while Python tasks pause; `wifi.py` is an Art Matrix-compatible shim over it), `gitmatrix._web` (phew routes, JSON API under `/api/v1/`, static pages from `/html`, captive 302 to `/wifi.html` in AP mode), `gitmatrix._log` (RAM ring, never written to flash). Saving WiFi schedules a watchdog reboot (`gitmatrix.reboot()`), never `machine.reset()`. Discover, Plugin settings, Notifications and Sounds pages are placeholders. Not yet done: *hold 10 s → WiFi reset* (§2.2); use Forget network in the UI, or clear `wifi_ssid` in `/config.py`.
 
 ### 2.8 Security (matches Art Matrix)
 - Web UI and API are **open on the LAN** by default, like Art Matrix.
@@ -199,7 +199,9 @@ main.py
 - [ ] `network.hostname()` set before `active(True)` makes `gitmatrix.local` resolve (mDNS).
 - [ ] `asyncio.start_server` works on 1.29, and tasks created in `boot()` (captive DNS) survive `asyncio.run`; the DNS socket survives AP restarts.
 - [ ] Captive portal opens the WiFi page on iOS and Android.
-- [ ] Scan time (~2 s blocking in CYW43) and audio underruns while A2DP streams; same for page loads.
+- [ ] Scan duration and the display/web stall during a web rescan (expect ~1-3 s); audio underruns while A2DP streams; same for page loads.
+- [ ] Soft `machine.Timer(-1)` callbacks run inside `WLAN.scan()`'s wait so the watchdog stays fed (try a long passive scan with a short WDT).
+- [ ] The boot pre-scan in setup mode with the AP already up: networks are listed on first page load and the AP stays up.
 - [ ] Save & reboot → watchdog reboot → joins the new network.
 - [ ] `bt_audio.set_pairable` exists (else the toggle only changes config).
 - [ ] Free RAM with phew loaded, and page load speed from flash.

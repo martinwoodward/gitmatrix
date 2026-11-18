@@ -153,13 +153,26 @@ def test_wifi_scan_runs_in_background(web, bt):
     assert call("POST", "/api/v1/wifi/scan").status == 202
     assert len(web.spawned) == 1  # a second click doesn't start a second scan
     feeds = []
-    web.rt.watchdog.feed = lambda: feeds.append(1)
+    web.rt.watchdog.feed = lambda: feeds.append(len(stubs.Timer.live))
     asyncio.run(web.spawned[0])
     n = ok("GET", "/api/v1/wifi/networks")
     assert not n["scanning"] and n["networks"][0]["ssid"] == "office" and n["current"] == "home"
-    assert feeds  # fed either side of the blocking scan
+    assert 1 in feeds and stubs.Timer.live == []  # fed by the keepalive timer mid-scan, then stopped
     w = ok("GET", "/api/v1/wifi")
     assert w["audio_streaming"] and w["mode"] == _wifi.CONNECTED
+
+
+def test_wifi_rescans_are_rate_limited(web):
+    assert call("POST", "/api/v1/wifi/scan").status == 202
+    asyncio.run(web.spawned[0])
+    web.clock.advance(1000)
+    r = call("POST", "/api/v1/wifi/scan")
+    assert r.status == 429 and r.json["retry_ms"] == _wifi.SCAN_COOLDOWN_MS - 1000
+    assert "try again in 14 s" in r.json["error"]
+    assert len(web.spawned) == 1 and web.net.sta.scans == 1
+    web.clock.advance(_wifi.SCAN_COOLDOWN_MS)
+    assert call("POST", "/api/v1/wifi/scan").status == 202 and len(web.spawned) == 2
+    web.spawned[1].close()
 
 
 def test_bluetooth(web, bt):
@@ -223,6 +236,8 @@ def test_captive_portal_redirects_unknown_hosts_in_ap_mode(rig):
     rig.net = stubs.FakeNetwork()
     rt = rig.boot()
     assert rt.wifi.mode == _wifi.SETUP and rig.net.ap.on
+    # scanned once during boot, before the event loop, for the setup page
+    assert rig.net.sta.scans == 1 and rt.wifi.scanned_at is not None
     _web.setup(rt)
     r = call("GET", "/generate_204", host="connectivitycheck.gstatic.com")
     assert r.status == 302 and r.headers["Location"] == "http://192.168.4.1/wifi.html"

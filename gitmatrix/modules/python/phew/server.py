@@ -270,7 +270,8 @@ status_message_map = {
   408: "Request Timeout", 409: "Conflict", 410: "Gone",
   414: "URI Too Long", 415: "Unsupported Media Type",
   416: "Range Not Satisfiable", 418: "I'm a teapot",
-  500: "Internal Server Error", 501: "Not Implemented"
+  429: "Too Many Requests",
+  500: "Internal Server Error", 501: "Not Implemented", 503: "Service Unavailable"
 }
 
 

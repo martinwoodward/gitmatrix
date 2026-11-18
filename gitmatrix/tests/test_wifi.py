@@ -132,6 +132,41 @@ def test_scan_dedupes_sorts_and_activates_sta_in_setup():
     assert w.scanned_at is not None and not w.scanning
 
 
+def test_scan_keeps_watchdog_fed_while_blocked_and_stops_after():
+    w, net = make("home", "secret123")
+    w.start(0)
+    feeds = []
+    seen = []
+    net.sta.found = [(b"home", b"x", 6, -50, 3, False)]
+    real = net.sta.scan
+
+    def slow_scan():
+        assert [t.period for t in stubs.Timer.live] == [_wifi.SCAN_FEED_MS]
+        seen.append(len(feeds))
+        out = real()             # fires the keepalive timer once, as a ~1 s scan would
+        seen.append(len(feeds))
+        return out
+
+    net.sta.scan = slow_scan
+    w.scan(lambda: feeds.append(1))
+    assert seen[1] > seen[0] >= 1      # fed before, and during, the blocking call
+    assert stubs.Timer.live == []      # keepalive stopped afterwards
+
+
+def test_prescan_only_in_setup_mode_and_scans_rate_limited():
+    w, net = make("home", "secret123")
+    w.start(0)
+    assert w.prescan() == [] and net.sta.scans == 0   # joining: nothing to provision
+    w, net = make()
+    w.start(0)
+    net.sta.found = [(b"cafe", b"w", 1, -60, 0, False)]
+    assert w.scan_wait_ms(0) == 0
+    assert w.prescan()[0]["ssid"] == "cafe" and net.sta.scans == 1
+    now = w.scanned_at
+    assert w.scan_wait_ms(now + 1000) == _wifi.SCAN_COOLDOWN_MS - 1000
+    assert w.scan_wait_ms(now + _wifi.SCAN_COOLDOWN_MS) == 0
+
+
 def test_scan_failure_is_logged_not_raised():
     w, net = make()
     w.start(0)

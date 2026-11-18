@@ -110,6 +110,8 @@ def boot(input_=None, bt=None, network_=None):
     rt.wifi = _runtime.wifi = WiFi(config, _runtime.firmware, network_)
     try:
         rt.wifi.start()
+        # the event loop isn't running yet, so the blocking scan stalls nothing
+        rt.wifi.prescan(rt.watchdog.feed)
     except Exception as e:  # noqa: BLE001 - no WiFi is bad, but no display and speaker is worse
         _log.log(f"wifi: start failed {_compat.error_text(e)}")
     config.save()
