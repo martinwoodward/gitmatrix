@@ -31,7 +31,7 @@ Findings that shaped the code:
   bit) before calling `machine.soft_reset()`. `boot()` arms it again.
 - **WiFi interfaces survive a soft reset.** The STA stays connected with its old netif, so the
   new hostname wasn't registered with mDNS. `_wifi.start()` now deactivates any active STA/AP
-  first, so a reconnect takes 3–17 s.
+  first, so a reconnect usually takes 3–17 s. Once it took 3 attempts, ~50 s.
 - A hang still trips the 8 s watchdog, which is a warm reset and so can hang the chip until a
   power cycle. That's the remaining risk; see §4.
 
@@ -99,6 +99,7 @@ Conclusion: soft reset is reliable here. `gitmatrix.reboot()` now uses it (4ae00
   the chip until it is power cycled. Phase 0 makes this unavoidable in hardware. Hangs should be
   rare, but if one happens the device may need a replug.
 - `bt_audio.set_pairable` doesn't exist on 1.29: the pairable toggle is config-only.
+- Rejoining after a soft reset sometimes needs a second or third attempt (up to ~50 s).
 - The first index refresh straight after joining WiFi can time out once (it retries later).
 - Plugin settings silently ignore unknown keys (the API returns 200).
 - Still to run: audio checks, menu/encoder by hand, safe mode with the knob held, fallback AP,
