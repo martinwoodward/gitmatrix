@@ -1029,6 +1029,92 @@ def notify(request):
     return {"id": note.id, "queued": len(n.queue)}, 202
 
 
+# ---- MQTT / Home Assistant -------------------------------------------------------
+
+MQTT_FIELDS = ("enabled", "host", "port", "user", "password", "tls", "discovery", "discovery_prefix", "base_topic")
+
+
+def _mqtt_text(value, field, limit):
+    text = str(value).strip() if value is not None else ""
+    if len(text) > limit or any(c in text for c in " \t\r\n\x00"):
+        raise ValueError(f"{field}: up to {limit} characters, no spaces")
+    return text or None
+
+
+def _mqtt_settings(cfg, body):
+    from gitmatrix import _mqtt
+
+    for key in body:
+        if key not in MQTT_FIELDS:
+            raise ValueError(f"unknown field: {key}")
+    for key in ("enabled", "tls", "discovery"):
+        if key in body:
+            cfg.set("mqtt_" + key, _bool(body[key]))
+    if "host" in body:
+        cfg.set("mqtt_host", _mqtt_text(body["host"], "host", _mqtt.MAX_HOST))
+    if "port" in body:
+        port = int(body["port"]) if body["port"] not in (None, "") else None
+        if port is not None and not 0 < port < 65536:
+            raise ValueError("port must be 1-65535")
+        cfg.set("mqtt_port", port)
+    if "user" in body:
+        cfg.set("mqtt_user", _mqtt_text(body["user"], "user", _mqtt.MAX_SECRET))
+    if "password" in body:      # write-only; "" or null clears it
+        password = body["password"]
+        password = str(password) if password else ""
+        if len(password) > _mqtt.MAX_SECRET:
+            raise ValueError(f"password: up to {_mqtt.MAX_SECRET} characters")
+        cfg.set("mqtt_password", password or None)
+    for key in ("discovery_prefix", "base_topic"):
+        if key in body:
+            value = str(body[key]).strip() if body[key] else ""
+            if value and not _mqtt.valid_topic(value):
+                raise ValueError(f"{key}: a topic without spaces, '+', '#' or a leading/trailing '/'")
+            cfg.set("mqtt_" + key, value or None)
+    if cfg.get("mqtt_enabled") and not cfg.get("mqtt_host"):
+        raise ValueError("host: set the broker's address to turn MQTT on")
+
+
+def _mqtt_values(cfg):
+    from gitmatrix import _mqtt
+
+    s = _mqtt.settings(cfg)
+    client = _runtime.mqtt
+    tls = bool(cfg.get("mqtt_tls", False))
+    return {
+        "enabled": bool(cfg.get("mqtt_enabled", False)),
+        "host": cfg.get("mqtt_host"),
+        "port": cfg.get("mqtt_port"),           # null: the default for tls
+        "default_port": 8883 if tls else 1883,
+        "user": cfg.get("mqtt_user"),
+        "password_set": bool(cfg.get("mqtt_password")),
+        "tls": tls,
+        "discovery": bool(cfg.get("mqtt_discovery", True)),
+        "discovery_prefix": cfg.get("mqtt_discovery_prefix") or "homeassistant",
+        "base_topic": cfg.get("mqtt_base_topic"),   # null: default_base_topic
+        "default_base_topic": "gitmatrix/" + _mqtt.hostname(cfg),
+        "topic": s["base"] if s else cfg.get("mqtt_base_topic") or "gitmatrix/" + _mqtt.hostname(cfg),
+        "status": client.status() if client is not None else {"state": "unavailable", "connected": False},
+    }
+
+
+@api("/mqtt", ("GET", "POST"))
+def mqtt(request):
+    cfg = _config()
+    if request.method == "POST":
+        before = {k: v for k, v in cfg.values.items() if k.startswith("mqtt_")}
+        try:
+            _mqtt_settings(cfg, _body(request))
+        except (ValueError, TypeError):
+            cfg.values.update(before)       # all or nothing
+            raise
+        if _flash.can_write():
+            cfg.save()      # else housekeeping saves it once playback stops
+        if _runtime.mqtt is not None:
+            _runtime.mqtt.reconfigure()     # applied in place: no reboot
+    return _mqtt_values(cfg)
+
+
 # ---- sounds -------------------------------------------------------------------
 
 @api("/sounds")
@@ -1124,7 +1210,12 @@ def sound(request):
         if stopped:
             task.cancel()
         return {"stopped": stopped}
-    body = _body(request)
+    return play_request(_body(request))
+
+
+def play_request(body):
+    """POST /sound's body -> (reply, status). Shared with MQTT's <base>/sound."""
+    global _sound_task
     for key in body:
         if key not in SOUND_FIELDS:
             raise ValueError(f"unknown field: {key}")
@@ -1141,20 +1232,20 @@ def sound(request):
         if body.get("sound") is not None:
             source = _sounds.find(str(body["sound"]))
             if source is None:
-                return error(404, f"no sound called {body['sound']}")
+                return {"error": f"no sound called {body['sound']}"}, 404
         elif body.get("sound_data") is not None:
             source = _notify._b64(body["sound_data"], _sounds.MAX_INLINE, "sound_data")  # noqa: SLF001
             _sounds.parse_wav(source)
         else:
             url = _notify._url(body["sound_url"], "sound_url")  # noqa: SLF001
     except _notify.NotifyError as e:
-        return error(e.status, _compat.error_text(e))
+        return {"error": _compat.error_text(e)}, e.status
     policy = _notify.sound_policy(_config(), high, _flash.streaming(), force=force)
     if policy not in ("play", "interrupt"):
         _sounds.last_result = policy
-        return {"played": False, "result": policy}
+        return {"played": False, "result": policy}, 200
     if _sound_busy():
-        return {"played": False, "result": "busy"}
+        return {"played": False, "result": "busy"}, 200
     _sound_task = spawn(_play_sound(source, url, high, force))
     return {"played": True, "result": policy}, 202
 

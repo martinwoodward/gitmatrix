@@ -50,3 +50,15 @@ api_token = None
 
 # Let new phones find and pair with the speaker
 bt_pairable = True
+
+# MQTT / Home Assistant (set from the web Settings page). Off by default.
+# Changes apply straight away, no reboot. TLS doesn't check certificates.
+mqtt_enabled = False
+mqtt_host = None
+mqtt_port = None            # None: 1883, or 8883 with TLS
+mqtt_user = None
+mqtt_password = None
+mqtt_tls = False
+mqtt_discovery = True       # announce entities to Home Assistant
+mqtt_discovery_prefix = None    # None: "homeassistant"
+mqtt_base_topic = None      # None: "gitmatrix/<network name>"

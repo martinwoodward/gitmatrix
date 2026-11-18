@@ -58,6 +58,7 @@ class Runtime:
         self.store = None
         self.notifier = None
         self.events = None
+        self.mqtt = None
         self.booted = 0
         self.healthy = False
 
@@ -229,6 +230,13 @@ async def _main(rt):
     if rt.wifi is not None and rt.wifi.net is not None:
         asyncio.create_task(_wifi(rt))
         asyncio.create_task(_store_task(rt))
+        try:
+            from gitmatrix import _mqtt
+
+            rt.mqtt = _runtime.mqtt = _mqtt.Mqtt(rt.config, rt.events)
+            asyncio.create_task(rt.mqtt.run())     # idles until switched on
+        except Exception as e:  # noqa: BLE001 - MQTT is optional
+            _log.log(f"mqtt: {_compat.error_text(e)}")
         try:
             from gitmatrix import _web
 
