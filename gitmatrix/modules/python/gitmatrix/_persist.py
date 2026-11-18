@@ -29,7 +29,7 @@ BOOT_REG = 1     # mem_backup()[1] = SCRATCH1
 MAGIC = 0x2A
 BOOT_MAGIC = 0x2A00
 
-HOOKS = ("import", "update", "on_show", "on_hide", "on_input", "process_config", "on_notify", "settings")
+HOOKS = ("import", "update", "on_show", "on_hide", "on_input", "process_config", "on_notify", "on_settings")
 HOOK_IDS = {name: i for i, name in enumerate(HOOKS)}
 
 
