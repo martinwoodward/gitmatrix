@@ -148,6 +148,15 @@ def test_upload_find_and_delete(root):
         _sounds.delete("chime")
 
 
+def test_delete_refuses_a_sound_that_is_playing(root, monkeypatch):
+    _sounds.save("door", wav())
+    monkeypatch.setattr(_sounds, "playing", _sounds.find("door"))
+    with pytest.raises(SoundError) as e:
+        _sounds.delete("door")
+    assert e.value.status == 409
+    assert _sounds.find("door") is not None
+
+
 def test_upload_while_streaming_is_queued_then_written(root, bt, monkeypatch):
     monkeypatch.setattr(_sounds, "MAX_DEFERRED", 1500)
     bt.streaming_now = True

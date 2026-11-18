@@ -275,7 +275,7 @@ as `notification` `start`/`end`.
 | `GET sounds` | `{sounds: [{name, builtin, size}], pending, used, max_size, max_total, playing, last_result}` |
 | `GET sounds/{name}` | one entry, 404 if unknown |
 | `POST sounds/{name}` | upload a WAV, either as a raw body (`Content-Type: audio/wav`, ≤ 256 KB) or `{"data": base64}`; 2 MB in total. Returns `202 {"queued": true}` while Bluetooth audio plays (it is saved when playback stops) |
-| `DELETE sounds/{name}` | delete an uploaded sound (built-ins: 400) |
+| `DELETE sounds/{name}` | delete an uploaded sound (built-ins: 400; 409 while it is playing) |
 | `POST sounds/{name}/play` | preview it at the current volume, ignoring alert settings; `{"played": false, "reason"}` while streaming or busy |
 
 ```sh

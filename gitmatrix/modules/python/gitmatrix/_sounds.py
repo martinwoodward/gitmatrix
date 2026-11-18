@@ -200,6 +200,9 @@ def delete(name):
     p = custom_path(name)
     if not _compat.exists(p):
         return False
+    if playing == p:
+        # removing a file play() is still reading took the device down on 1.29
+        raise SoundError(f"{name} is playing; try again when it finishes", 409)
     import os
     _flash.check()
     os.remove(p)
