@@ -1,0 +1,16 @@
+{
+  "name": "My Plugin",
+  "version": "1.0.0",
+  "description": "A dot bouncing along the display",
+  "author": "your-github-username",
+  "category": "Visualisations",
+  "requires_internet": false,
+  "tags": ["example", "template"],
+  "min_firmware": "0.1.0",
+  "input": true,
+  "hold": false,
+  "settings": [
+    {"key": "speed", "type": "int", "label": "Speed (pixels/s)", "min": 1, "max": 120, "default": 20},
+    {"key": "colour", "type": "color", "label": "Colour", "default": "#39d353"}
+  ]
+}
