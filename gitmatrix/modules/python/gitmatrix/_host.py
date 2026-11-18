@@ -2,15 +2,17 @@
 # current plugin(s), composites and presents. Plugins only ever run inside
 # loader.guard(), so a broken one can't take the host down with it.
 
-from gitmatrix import _audio, _compat, _input, _menu, _notify, _runtime
+from gitmatrix import _audio, _compat, _events, _input, _menu, _notify, _runtime
 
 PLUGIN = 0
 MENU = 1
 NOTIFY = 2
+MODE_NAMES = ("plugin", "menu", "notification")
 
 TRANSITION_MS = 700
 WIDTH_PX = 53
 FRAME_MS = 16
+PUBLISH_MS = 500        # how often Bluetooth/WiFi state is checked for the event bus
 
 
 class Host:
@@ -39,6 +41,11 @@ class Host:
         self.renderer = None
         self.forced = None              # Plugin forced on screen by a notification
         self.saved = None               # (plugin, ms it had been showing) to restore
+        self._pub_plugin = False        # what the event bus was last told (False: nothing yet)
+        self._pub_mode = -1
+        self._pub_at = None
+        self._pub_bt = None
+        self._pub_wifi = None
         _runtime.host = self
 
     # ---- rotation ---------------------------------------------------------------
@@ -156,6 +163,12 @@ class Host:
         self.input.poll()
         events = self.input.since(self.seq)
         self.seq = self.input.seq
+        bus = _runtime.events
+        if bus is not None:
+            # observed, not consumed: the menu/plugins below still act on them
+            for e in events:
+                bus.input(e)
+            self.publish(bus, now)
 
         if self.mode == MENU:
             if self.menu.frame(self.compositor.fb, events, now):
@@ -215,6 +228,37 @@ class Host:
                     return
         if self.current is current and current.module is not None:
             self.compositor.present(current.surface)
+
+    def publish(self, bus, now):
+        """Tell the event bus about plugin/mode changes (made by the frame,
+        the menu or the API) and, every PUBLISH_MS, Bluetooth/WiFi changes.
+        Allocation-free unless something changed."""
+        current = self.current
+        if current is not self._pub_plugin:
+            self._pub_plugin = current
+            name = current.name if current is not None else None
+            bus.change(_events.PLUGIN, name, {"name": name}, now)
+        if self.mode != self._pub_mode:
+            self._pub_mode = self.mode
+            mode = MODE_NAMES[self.mode]
+            bus.change(_events.MODE, mode, {"mode": mode}, now)
+        if self._pub_at is not None and _compat.ticks_diff(now, self._pub_at) < PUBLISH_MS:
+            return
+        self._pub_at = now
+        audio = self.audio
+        connected = bool(audio is not None and audio.connected())
+        streaming = bool(audio is not None and audio.streaming())
+        bt = (connected << 1) | streaming
+        if bt != self._pub_bt:
+            self._pub_bt = bt
+            value = {"connected": connected, "streaming": streaming}
+            bus.change(_events.BLUETOOTH, value, value, now)
+        wifi = _runtime.wifi
+        ip = wifi.ip if wifi is not None and wifi.connected() else None
+        if ip != self._pub_wifi:
+            self._pub_wifi = ip
+            value = {"connected": ip is not None, "ip": ip}
+            bus.change(_events.WIFI, value, value, now)
 
     def _rotation_due(self, now):
         delay = self.config.get("delay", 30)
@@ -344,11 +388,13 @@ class Host:
             # a newer note with this id is being prepared: keep this one up until it's ready
             done = notifier is not None and notifier.pending is not None
         if done:
-            nxt = notifier.take(now) if notifier is not None and notifier.pending is not None else None
+            nxt = None
+            if notifier is not None and notifier.pending is not None:
+                notifier.finished(note, False, now)     # its end event before the next one's start
+                nxt = notifier.take(now)
             if nxt is None:
                 self.end_notification(now, False)
                 return False
-            notifier.finished(note, False, now)
             return self.begin_notification(nxt, now) and self._notify_frame((), now)
         if self.forced is not None:
             self.loader.update(self.forced)
@@ -423,6 +469,9 @@ class Host:
             self.compositor.driver.set_brightness(max(0.0, min(1.0, self.config.get("brightness", 60) / 100)))
         except AttributeError:
             pass
+        bus = _runtime.events
+        if bus is not None:
+            bus.change(_events.BRIGHTNESS, self.config.get("brightness", 60))
 
     def menu_get_volume(self):
         return self.config.get("volume", 64) / 127
@@ -436,6 +485,9 @@ class Host:
     def apply_volume(self):
         if self.audio is not None:
             self.audio.set_volume(self.config.get("volume", 64) / 127)
+        bus = _runtime.events
+        if bus is not None:
+            bus.change(_events.VOLUME, volume_percent(self.config))
 
     def menu_wifi_status(self):
         wifi = _runtime.wifi
@@ -469,3 +521,8 @@ class Host:
 def _plugin_input():
     import gitmatrix
     return getattr(gitmatrix, "input", None)
+
+
+def volume_percent(config):
+    """The 0-127 config volume as 0-100."""
+    return int(config.get("volume", 64) * 100 / 127 + 0.5)

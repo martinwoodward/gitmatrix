@@ -284,6 +284,14 @@ async def _read_request_head(reader):
   return request
 
 
+class Deferred:
+  """GitMatrix: a handler can return Deferred(coro) to finish its response
+  asynchronously (e.g. a long-poll). The coroutine runs in this connection's
+  task and returns any normal response value."""
+  def __init__(self, coro):
+    self.coro = coro
+
+
 class BodyTooLarge(Exception):
   pass
 
@@ -372,6 +380,8 @@ async def _serve_request(reader, writer):
         response = catchall_handler(request)
       else:
         response = ("Not Found", 404, "text/plain")
+      if isinstance(response, Deferred):
+        response = await response.coro
     except Exception as e:  # noqa: BLE001
       logging.exception(f"! {request.method} {request.path} raised {e}")
       sys.print_exception(e)

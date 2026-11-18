@@ -3,7 +3,7 @@
 import builtins
 
 import gitmatrix
-from gitmatrix import _audio, _compat, _flash, _log, _notify, _persist, _runtime, _sounds, _state, _store
+from gitmatrix import _audio, _compat, _events, _flash, _log, _notify, _persist, _runtime, _sounds, _state, _store
 from gitmatrix._config import Config, load_firmware_config
 from gitmatrix._display import Compositor, DisplayProxy
 from gitmatrix._host import Host
@@ -57,6 +57,7 @@ class Runtime:
         self.wifi = None
         self.store = None
         self.notifier = None
+        self.events = None
         self.booted = 0
         self.healthy = False
 
@@ -110,6 +111,7 @@ def boot(input_=None, bt=None, network_=None):
     loader.sync_config()
     crashed = loader.check_crash(was_watchdog)
 
+    rt.events = _runtime.events = _events.Bus()
     rt.host = host = Host(config, loader, rt.compositor, rt.input, gitmatrix.audio, safe)
     _flash.on_resume = host.apply_pairable
     rt.notifier = host.notifier = _notify.Notifier(config, loader)

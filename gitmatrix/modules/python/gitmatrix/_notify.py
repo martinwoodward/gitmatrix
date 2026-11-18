@@ -10,7 +10,7 @@
 
 import binascii
 
-from gitmatrix import _compat, _log, _png, _runtime, _sounds
+from gitmatrix import _compat, _events, _log, _png, _runtime, _sounds
 
 QUEUE_SIZE = 8
 AGE_MS = 60000          # a normal note waiting this long ranks with a fresh high one
@@ -65,6 +65,7 @@ class Note:
         self.cancelled = False   # dismissed via the API while showing
         self.replaced = False    # a newer note with the same id is on its way
         self.sound_result = None
+        self.ended = False       # the end event has gone out
 
     def summary(self):
         return {"id": self.id, "text": self.text, "plugin": self.plugin,
@@ -334,13 +335,15 @@ def _localtime():
     return t if t[0] >= 2024 else None   # clock not set yet
 
 
-def sound_policy(config, high, streaming=False, t=None):
+def sound_policy(config, high, streaming=False, t=None, force=False):
     """What to do with a note's sound: play, interrupt (play over the stream),
-    or one of the silent reasons: off, quiet, streaming."""
-    if not config.get("alert_sound", True):
-        return "off"
-    if in_quiet_hours(config, t) and not (high and config.get("quiet_bypass_high", False)):
-        return "quiet"
+    or one of the silent reasons: off, quiet, streaming. `force` (POST /sound)
+    overrides the alert switch and quiet hours, never a Bluetooth stream."""
+    if not force:
+        if not config.get("alert_sound", True):
+            return "off"
+        if in_quiet_hours(config, t) and not (high and config.get("quiet_bypass_high", False)):
+            return "quiet"
     if streaming:
         if high and config.get("alert_interrupt_audio", False):
             return "interrupt"
@@ -541,11 +544,16 @@ class Notifier:
         self.shown += 1
         self.last = note.summary()
         self.start_sound(note)
+        _emit({"action": "start", "id": note.id, "plugin": note.plugin, "text": note.text,
+               "priority": "high" if note.high else "normal"}, note.id)
         return note
 
     def finished(self, note, dismissed, now):
         if self.active is note:
             self.active = None
+        if not note.ended:
+            note.ended = True
+            _emit({"action": "end", "id": note.id, "dismissed": bool(dismissed)}, None)
         if dismissed:
             self.stop_sound()
             self.grace_until = _compat.ticks_add(now, GRACE_MS)
@@ -625,6 +633,13 @@ class Notifier:
                 _log.log(f"notify: {_compat.error_text(e)}")
                 worked = False
             await _sleep_ms(10 if worked else 50)
+
+
+def _emit(data, active):
+    bus = _runtime.events
+    if bus is not None:
+        bus.state[_events.NOTIFICATION] = active
+        bus.emit(_events.NOTIFICATION, data)
 
 
 def split_url(url):

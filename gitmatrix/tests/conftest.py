@@ -59,7 +59,7 @@ def root(tmp_path):
         _persist.set_store(old_store)
         _runtime.ROOT = old_root
         _runtime.host = _runtime.loader = _runtime.config = _runtime.current = None
-        _runtime.wifi = _runtime.reboot_at = _runtime.notifier = None
+        _runtime.wifi = _runtime.reboot_at = _runtime.notifier = _runtime.events = None
         gitmatrix.notification = None
         _runtime.firmware = {}
         builtins.screen, builtins.display = screen, display

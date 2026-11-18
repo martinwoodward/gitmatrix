@@ -328,14 +328,15 @@ async def play(source, config=None):
             f.close()
 
 
-async def alert(source, high, config):
-    """Play a notification's sound if the alert settings allow it. The one
-    place that decides what happens while Bluetooth audio is streaming."""
+async def alert(source, high, config, force=False):
+    """Play a notification's (or POST /sound's) sound if the alert settings
+    allow it. The one place that decides what happens while Bluetooth audio is
+    streaming."""
     global last_result
     from gitmatrix import _notify
 
     streaming = _flash.streaming()
-    policy = _notify.sound_policy(config, high, streaming)
+    policy = _notify.sound_policy(config, high, streaming, force=force)
     last_result = policy
     if policy in ("off", "quiet"):
         return policy

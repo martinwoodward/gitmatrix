@@ -13,6 +13,7 @@ wifi = None        # the WiFi manager (gitmatrix._wifi.WiFi)
 firmware = {}      # /gitmatrix_config.py values (AP_PASSWORD, PLUGIN_REPO, ...)
 store = None      # the plugin Store (gitmatrix._store.Store)
 notifier = None    # the Notifier (gitmatrix._notify.Notifier)
+events = None      # the event Bus (gitmatrix._events.Bus)
 reboot_at = None   # ticks_ms when housekeeping should reboot (after a web request)
 
 

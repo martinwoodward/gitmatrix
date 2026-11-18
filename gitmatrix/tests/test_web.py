@@ -406,3 +406,294 @@ def test_body_limit_checked_before_reading(web):
     assert big_wav.body == b"{}"
     with pytest.raises(server.BodyTooLarge):
         asyncio.run(server._read_request_body(Reader(), req("/api/v1/sounds/x", "application/json", 70000)))  # noqa: SLF001
+
+
+# ---- REST API v1 complete (phase 5) --------------------------------------------
+
+from gitmatrix import _events, _notify, _sounds  # noqa: E402
+
+
+@pytest.fixture
+def fast_poll(monkeypatch):
+    async def tick(_ms):
+        await asyncio.sleep(0)
+
+    monkeypatch.setattr(_events, "sleep_ms", tick)
+
+
+def get(path, **kw):
+    """call(), running a deferred (long-poll) reply to completion."""
+    from phew.server import Request
+
+    r = Request("GET", path, "HTTP/1.1")
+    r.headers = {"host": "gitmatrix.local", **kw.get("headers", {})}
+    resp = _web.dispatch(r)
+    if type(resp).__name__ == "Deferred":
+        resp = asyncio.run(resp.coro)
+    resp.json = json.loads(resp.body)
+    return resp
+
+
+def types(out):
+    return [e["type"] for e in out["events"]]
+
+
+def test_status_phase5_fields(web):
+    web.frames()
+    s = ok("GET", "/api/v1/status")
+    assert s["plugin"] == "one" and s["mode"] == "plugin" and s["firmware"] == s["version"]
+    assert s["encoder"] == {"position": 0, "seq": 0, "last": None}
+    assert s["events"]["seq"] > 0 and s["events"]["pollers"] == 0
+    assert "memory" in s and "free" in s["flash"]
+    assert s["notifications"]["active"] is None
+    web.turn(2)
+    web.turn(-1)
+    s = ok("GET", "/api/v1/status")
+    assert s["encoder"]["position"] == 1 and s["encoder"]["seq"] == 2
+    assert s["encoder"]["last"] == {"action": "turn", "delta": -1, "position": 1}
+    web.press()
+    assert ok("GET", "/api/v1/status")["mode"] == "menu"
+
+
+def test_events_history_knob_and_state_changes(web, bt):
+    web.frames()
+    out = get("/api/v1/events").json
+    assert {"plugin", "mode", "wifi", "bluetooth", "brightness", "volume"} <= set(types(out))
+    assert out["dropped"] == 0 and not out["reset"]
+    since = out["next"]
+    web.turn(1)
+    web.frames()        # the plugin change is published on the next frame
+    out = get(f"/api/v1/events?since={since}&timeout=0").json
+    turn = out["events"][0]
+    assert turn["type"] == "encoder" and turn["action"] == "turn" and turn["delta"] == 1 and turn["position"] == 1
+    # observed, not consumed: the knob still moved to the next plugin
+    plugin = [e for e in out["events"] if e["type"] == "plugin"]
+    assert web.rt.host.current.name == "two" and plugin[-1]["name"] == "two" and plugin[-1]["previous"] == "one"
+    since = out["next"]
+    ok("POST", "/api/v1/volume", {"value": 80})
+    ok("POST", "/api/v1/brightness", {"value": 20})
+    ok("POST", "/api/v1/brightness", {"value": 20})     # no change, no event
+    bt.is_connected = bt.streaming_now = True
+    web.frames(40)
+    out = get(f"/api/v1/events?since={since}&timeout=0").json
+    assert types(out) == ["volume", "brightness", "bluetooth"]
+    assert out["events"][0]["value"] == 80 and out["events"][2]["streaming"]
+    only = get(f"/api/v1/events?since={since}&types=brightness&timeout=0").json
+    assert types(only) == ["brightness"] and only["next"] == out["next"]
+
+
+def test_events_notification_start_and_end(web):
+    web.frames()
+    since = web.rt.events.seq
+    ok("POST", "/api/v1/notify", {"text": "hi", "id": "n", "duration": 0.1})
+    asyncio.run(web.rt.notifier.step())
+    web.frames(20)
+    out = get(f"/api/v1/events?since={since}&timeout=0").json
+    notes = [(e["action"], e["id"]) for e in out["events"] if e["type"] == "notification"]
+    assert notes == [("start", "n"), ("end", "n")]
+    modes = [e["mode"] for e in out["events"] if e["type"] == "mode"]
+    assert modes == ["notification", "plugin"]
+
+
+def test_events_long_poll(web, fast_poll):
+    bus = web.rt.events
+    since = bus.seq
+    out = get(f"/api/v1/events?since={since}&timeout=1")
+    assert out.status == 200 and out.json["events"] == [] and out.json["next"] == since
+
+    async def go():
+        resp = call_raw(f"/api/v1/events?since={since}&timeout=30")
+        task = asyncio.create_task(resp.coro)
+        await asyncio.sleep(0)
+        assert bus.waiters == 1
+        bus.change("volume", 7)
+        return await task
+
+    resp = asyncio.run(go())
+    out = json.loads(resp.body)
+    assert [e["value"] for e in out["events"]] == [7] and out["next"] == since + 1
+    assert bus.waiters == 0
+
+
+def call_raw(path):
+    from phew.server import Request
+
+    r = Request("GET", path, "HTTP/1.1")
+    r.headers = {"host": "gitmatrix.local"}
+    return _web.dispatch(r)
+
+
+def test_events_long_poll_cap_timeout_clamp_and_errors(web, fast_poll, monkeypatch):
+    bus = web.rt.events
+    since = bus.seq
+    asked = []
+    wait = bus.wait
+
+    def spy(s, kinds=None, timeout_ms=0):
+        asked.append(timeout_ms)
+        return wait(s, kinds, timeout_ms)
+
+    monkeypatch.setattr(bus, "wait", spy)
+
+    async def go():
+        a = asyncio.create_task(call_raw(f"/api/v1/events?since={since}&timeout=999").coro)
+        b = asyncio.create_task(call_raw(f"/api/v1/events?since={since}").coro)
+        await asyncio.sleep(0)
+        assert bus.waiters == 2
+        third = call("GET", f"/api/v1/events?since={since}")
+        assert third.status == 429 and third.json["retry_ms"] > 0
+        # history and immediate answers don't need a slot
+        assert call("GET", "/api/v1/events").status == 200
+        assert call("GET", f"/api/v1/events?since={since}&timeout=0").status == 200
+        bus.emit("wifi")
+        return await a, await b
+
+    for resp in asyncio.run(go()):
+        assert resp.status == 200
+    assert asked == [30000, 25000]
+    assert call("GET", "/api/v1/events?since=x").status == 400
+    assert call("GET", "/api/v1/events?types=nope").status == 400
+
+
+def test_show_with_data_and_duration_uses_notification_path(web):
+    web.frames()
+    out = ok("POST", "/api/v1/plugins/two/show", {"data": {"n": 1}, "duration": 0.2})
+    assert out["temporary"] and out["queued"] == 1
+    asyncio.run(web.rt.notifier.step())
+    web.frames()
+    host = web.rt.host
+    assert host.mode == _host.NOTIFY and host.note.plugin == "two" and host.note.data == {"n": 1}
+    web.frames(30)
+    assert host.mode == _host.PLUGIN and host.current.name == "one"
+    assert call("POST", "/api/v1/plugins/two/show", {"duration": 999}).status == 400
+    assert call("POST", "/api/v1/plugins/nope/show", {"duration": 1}).status == 404
+    assert call("POST", "/api/v1/plugins/two/show", {"duration": 1, "priority": "meh"}).status == 400
+
+
+def test_sound_plays_under_alert_policy(web, bt, monkeypatch):
+    out = call("POST", "/api/v1/sound", {"sound": "chime"})
+    assert out.status == 202 and out.json == {"played": True, "result": "play"}
+    web.spawned.pop().close()
+    monkeypatch.setattr(_sounds, "playing", "chime")
+    assert ok("POST", "/api/v1/sound", {"sound": "ping"})["result"] == "busy"
+    monkeypatch.setattr(_sounds, "playing", None)
+    web.rt.config.set("alert_sound", False)
+    assert ok("POST", "/api/v1/sound", {"sound": "chime"}) == {"played": False, "result": "off"}
+    assert ok("POST", "/api/v1/sound", {"sound": "chime", "force": True})["played"]
+    web.spawned.pop().close()
+    web.rt.config.set("alert_sound", True)
+    monkeypatch.setattr(_notify, "in_quiet_hours", lambda config, t=None: True)
+    assert ok("POST", "/api/v1/sound", {"sound": "chime"})["result"] == "quiet"
+    monkeypatch.setattr(_notify, "in_quiet_hours", lambda config, t=None: False)
+    # force never talks over a Bluetooth stream; only the interrupt setting does
+    bt.streaming_now = True
+    assert ok("POST", "/api/v1/sound", {"sound": "chime", "force": True})["result"] == "streaming"
+    web.rt.config.set("alert_interrupt_audio", True)
+    assert ok("POST", "/api/v1/sound", {"sound": "chime", "priority": "high"})["result"] == "interrupt"
+    web.spawned.pop().close()
+    assert not web.spawned
+
+
+def test_sound_validation_and_stop(web, monkeypatch):
+    assert call("POST", "/api/v1/sound", {}).status == 400
+    assert call("POST", "/api/v1/sound", {"sound": "chime", "sound_url": "http://x/y.wav"}).status == 400
+    assert call("POST", "/api/v1/sound", {"sound": "nope"}).status == 404
+    assert call("POST", "/api/v1/sound", {"sound_url": "ftp://x"}).status == 400
+    assert call("POST", "/api/v1/sound", {"sound_data": _b64(b"nope")}).status == 400
+    assert call("POST", "/api/v1/sound", {"sound": "chime", "volume": 3}).status == 400
+    assert call("POST", "/api/v1/sound", {"sound": "chime", "priority": "loud"}).status == 400
+    assert call("POST", "/api/v1/sound", {"sound_data": _b64(_wav())}).status == 202
+    web.spawned.pop().close()
+
+    class Task:
+        cancelled = False
+
+        def done(self):
+            return False
+
+        def cancel(self):
+            self.cancelled = True
+
+    task = Task()
+    monkeypatch.setattr(_web, "spawn", lambda coro: (coro.close(), task)[1])
+    assert ok("POST", "/api/v1/sound", {"sound_url": "http://example.com/a.wav"})["played"]
+    assert ok("POST", "/api/v1/sound", {"sound": "chime"})["result"] == "busy"
+    assert ok("DELETE", "/api/v1/sound") == {"stopped": True} and task.cancelled
+    assert ok("DELETE", "/api/v1/sound") == {"stopped": False}
+
+
+def test_sound_url_fetch_and_force_reach_alert(web, monkeypatch):
+    calls = []
+
+    async def fake_alert(source, high, config, force=False):
+        calls.append((source, high, force))
+
+    async def fake_fetch(url, limit):
+        if "bad" in url:
+            raise OSError("HTTP 404")
+        return _wav()
+
+    monkeypatch.setattr(_sounds, "alert", fake_alert)
+    monkeypatch.setattr(_notify, "_fetch", fake_fetch)
+    asyncio.run(_web._play_sound(None, "http://x/good.wav", True, True))
+    assert calls[0][0] == _wav() and calls[0][1:] == (True, True)
+    asyncio.run(_web._play_sound(None, "http://x/bad.wav", False, False))
+    assert len(calls) == 1 and "404" in _sounds.last_result
+
+
+def test_every_api_route_needs_the_token(web):
+    web.rt.config.set("api_token", "s3cret")
+    checked = 0
+    for path, _handler, methods in _web._ROUTES:
+        if not path.startswith("/api/v1/"):
+            continue
+        for method in methods:
+            resp = call(method, path.replace("<name>", "one"))
+            assert resp.status == 401, (method, path, resp.status)
+            checked += 1
+    assert checked > 40
+    assert call("GET", "/api/v1/events", headers={"authorization": "Bearer s3cret"}).status == 200
+
+
+def test_phew_serves_a_deferred_long_poll(web, fast_poll, monkeypatch):
+    """Through phew's real request handler: the long-poll reply goes out once
+    an event arrives."""
+    from phew import server
+
+    async def wait_for_ms(coro, ms):
+        return await coro
+
+    monkeypatch.setattr(server.uasyncio, "wait_for_ms", wait_for_ms, raising=False)
+    bus = web.rt.events
+    since = bus.seq
+
+    class Reader:
+        def __init__(self, lines):
+            self.lines = list(lines)
+
+        async def readline(self):
+            return self.lines.pop(0) if self.lines else b"\r\n"
+
+    class Writer:
+        out = b""
+
+        def write(self, data):
+            Writer.out += bytes(data)
+
+        async def drain(self):
+            pass
+
+    head = [f"GET /api/v1/events?since={since}&timeout=30 HTTP/1.1\r\n".encode(), b"Host: gitmatrix.local\r\n", b"\r\n"]
+
+    async def go():
+        task = asyncio.create_task(server._serve_request(Reader(head), Writer()))  # noqa: SLF001
+        for _ in range(5):
+            await asyncio.sleep(0)
+        assert Writer.out == b"" and bus.waiters == 1
+        bus.change("brightness", 1)
+        await task
+
+    asyncio.run(go())
+    status, _, body = Writer.out.partition(b"\r\n\r\n")
+    assert status.startswith(b"HTTP/1.1 200")
+    assert [e["type"] for e in json.loads(body)["events"]] == ["brightness"]

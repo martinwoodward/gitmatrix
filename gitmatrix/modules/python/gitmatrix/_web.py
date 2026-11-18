@@ -10,7 +10,7 @@
 
 import json
 
-from gitmatrix import _audio, _compat, _flash, _log, _notify, _runtime, _sounds, _wifi
+from gitmatrix import _audio, _compat, _events, _flash, _log, _notify, _runtime, _sounds, _wifi
 
 API = "/api/v1"
 COOKIE = "gm_token"
@@ -18,9 +18,14 @@ REBOOT_DELAY_MS = 1500
 SCAN_WARNING = "audio may stutter while scanning"
 MAX_TOKEN = 64
 MAX_BODY = 64 * 1024        # any request body, checked before it is read
+MAX_POLLERS = 2             # /events long-polls held open at once
+MAX_WAIT_S = 30             # longest /events long-poll
+DEFAULT_WAIT_S = 25
+RETRY_MS = 1000             # suggested back-off when the long-poll slots are full
 
 _rt = None          # the boot Runtime
 _scan_task = None
+_sound_task = None  # POST /sound
 _ROUTES = []        # (path, handler, methods), registered with phew by setup()
 
 
@@ -102,8 +107,30 @@ def authorized(request):
     return origin is None or _host_of(origin) == request.headers.get("host", "")
 
 
+def _normalize(out):
+    if isinstance(out, tuple):
+        return reply(out[0], out[1])
+    return out if not isinstance(out, (dict, list)) else reply(out)
+
+
+def deferred(coro):
+    """Answer later: phew awaits `coro` in this connection's task (long-polls)."""
+    from phew.server import Deferred
+
+    return Deferred(coro)
+
+
+async def _finish(coro):
+    try:
+        out = await coro
+    except (ValueError, TypeError, KeyError) as e:
+        return error(400, _compat.error_text(e))
+    return _normalize(out)
+
+
 def api(path, methods=("GET",)):
-    """Register an /api/v1 handler: auth, JSON replies, errors as JSON."""
+    """Register an /api/v1 handler: auth, JSON replies, errors as JSON. A
+    handler may return deferred(coro) to reply asynchronously."""
     def wrap(fn):
         def handler(request, **params):
             if not authorized(request):
@@ -112,9 +139,9 @@ def api(path, methods=("GET",)):
                 out = fn(request, **params)
             except (ValueError, TypeError, KeyError) as e:
                 return error(400, _compat.error_text(e))
-            if isinstance(out, tuple):
-                return reply(out[0], out[1])
-            return out if not isinstance(out, (dict, list)) else reply(out)
+            if type(out).__name__ == "Deferred":
+                return deferred(_finish(out.coro))
+            return _normalize(out)
         _ROUTES.append((API + path, handler, list(methods)))
         return fn
     return wrap
@@ -232,6 +259,33 @@ def _bt_status():
     }
 
 
+def _mode():
+    host = _host()
+    if host is None:
+        return None
+    from gitmatrix import _host as host_mod
+
+    return host_mod.MODE_NAMES[host.mode]
+
+
+def _encoder_status():
+    host = _host()
+    bus = _runtime.events
+    src = host.input if host is not None else None
+    return {
+        "position": bus.position if bus is not None else 0,
+        "seq": src.seq if src is not None else 0,
+        "last": bus.state.get(_events.ENCODER) if bus is not None else None,
+    }
+
+
+def _events_status():
+    bus = _runtime.events
+    if bus is None:
+        return None
+    return {"seq": bus.seq, "boot": bus.boot, "pollers": bus.waiters}
+
+
 def _input_status():
     host = _host()
     src = host.input if host is not None else None
@@ -252,10 +306,14 @@ def status(_request):
     wifi = _wifi_mgr()
     import gitmatrix
 
+    showing = _now_showing()
     return {
         "version": gitmatrix.VERSION,
+        "firmware": gitmatrix.VERSION,
         "uptime_ms": _compat.ticks_diff(_compat.ticks_ms(), _rt.booted) if _rt is not None else None,
-        "now_showing": _now_showing(),
+        "plugin": showing["name"] if showing else None,
+        "mode": _mode(),
+        "now_showing": showing,
         "menu_open": host is not None and host.mode != 0,
         "safe_mode": host.safe_mode if host is not None else None,
         "plugins": len(host.plugins()) if host is not None else 0,
@@ -265,6 +323,10 @@ def status(_request):
         "wifi": wifi.status() if wifi is not None else None,
         "bluetooth": _bt_status(),
         "input": _input_status(),
+        "encoder": _encoder_status(),
+        "events": _events_status(),
+        "memory": _memory(),
+        "flash": _flash_space(),
         "token_required": _token() is not None,
         "notifications": _notifier().status() if _notifier() is not None else None,
     }
@@ -338,11 +400,28 @@ def plugin_get(_request, name):
     return err or _plugin_info(name)
 
 
+SHOW_FIELDS = ("data", "duration", "priority", "id", "ttl", "sound", "sound_url", "sound_data", "repeat")
+
+
 @api("/plugins/<name>/show", ("POST",))
-def plugin_show(_request, name):
+def plugin_show(request, name):
     name, err = _known(name)
     if err:
         return err
+    body = _body(request)
+    if body.get("data") is not None or body.get("duration") is not None:
+        # for a while (and/or with data): the notification path pre-empts the
+        # rotation and hands back to whatever was showing
+        n = _notifier()
+        if n is None:
+            return error(503, "notifications are not running")
+        req = {k: body[k] for k in body if k in SHOW_FIELDS}
+        req["plugin"] = name
+        try:
+            note = n.submit(req)
+        except _notify.NotifyError as e:
+            return error(e.status, _compat.error_text(e))
+        return {"ok": True, "id": note.id, "queued": len(n.queue), "temporary": True}, 202
     if not _host().show(name):
         return {"ok": False, "error": f"{name} failed to load"}, 500
     return {"ok": True, "now_showing": _now_showing()}
@@ -1012,6 +1091,103 @@ def sound_play(_request, name):
         return {"played": False, "reason": "a sound is already playing"}
     spawn(_sounds.play(path, _config()))
     return {"played": True}
+
+
+SOUND_FIELDS = ("sound", "sound_url", "sound_data", "priority", "force")
+
+
+def _sound_busy():
+    task = _sound_task
+    busy = task is not None and not getattr(task, "done", lambda: False)()
+    return busy or _sounds.playing is not None
+
+
+async def _play_sound(source, url, high, force):
+    if url is not None:
+        try:
+            source = await _notify._fetch(url, _sounds.MAX_URL_BYTES)  # noqa: SLF001
+            _sounds.parse_wav(source)
+        except (OSError, ValueError) as e:
+            _sounds.last_result = f"error: {_compat.error_text(e)}"
+            _log.log(f"sound: {url}: {_sounds.last_result}")
+            return
+    await _sounds.alert(source, high, _config(), force)
+
+
+@api("/sound", ("POST", "DELETE"))
+def sound(request):
+    """Play a sound now, under the same rules as a notification's sound."""
+    global _sound_task
+    if request.method == "DELETE":
+        task, _sound_task = _sound_task, None
+        stopped = task is not None and not getattr(task, "done", lambda: False)()
+        if stopped:
+            task.cancel()
+        return {"stopped": stopped}
+    body = _body(request)
+    for key in body:
+        if key not in SOUND_FIELDS:
+            raise ValueError(f"unknown field: {key}")
+    given = [k for k in ("sound", "sound_url", "sound_data") if body.get(k) is not None]
+    if len(given) != 1:
+        raise ValueError("give one of sound, sound_url or sound_data")
+    priority = body.get("priority", "normal")
+    if priority not in ("normal", "high"):
+        raise ValueError("priority must be normal or high")
+    high = priority == "high"
+    force = _bool(body.get("force", False))
+    source = url = None
+    try:
+        if body.get("sound") is not None:
+            source = _sounds.find(str(body["sound"]))
+            if source is None:
+                return error(404, f"no sound called {body['sound']}")
+        elif body.get("sound_data") is not None:
+            source = _notify._b64(body["sound_data"], _sounds.MAX_INLINE, "sound_data")  # noqa: SLF001
+            _sounds.parse_wav(source)
+        else:
+            url = _notify._url(body["sound_url"], "sound_url")  # noqa: SLF001
+    except _notify.NotifyError as e:
+        return error(e.status, _compat.error_text(e))
+    policy = _notify.sound_policy(_config(), high, _flash.streaming(), force=force)
+    if policy not in ("play", "interrupt"):
+        _sounds.last_result = policy
+        return {"played": False, "result": policy}
+    if _sound_busy():
+        return {"played": False, "result": "busy"}
+    _sound_task = spawn(_play_sound(source, url, high, force))
+    return {"played": True, "result": policy}, 202
+
+
+# ---- events -------------------------------------------------------------------
+
+def _since(value):
+    if value is None or value == "":
+        return None
+    return int(value)
+
+
+async def _long_poll(bus, since, kinds, timeout_ms):
+    await bus.wait(since, kinds, timeout_ms)
+    return bus.read(since, kinds)
+
+
+@api("/events")
+def events(request):
+    """The event log, or a long-poll for what comes after `since`."""
+    bus = _runtime.events
+    if bus is None:
+        return error(503, "events are not running")
+    q = request.query
+    kinds = _events.parse_types(q.get("types"))
+    since = _since(q.get("since"))
+    timeout = float(q.get("timeout", DEFAULT_WAIT_S))
+    timeout = max(0.0, min(float(MAX_WAIT_S), timeout))
+    if since is None or timeout == 0 or bus.pending(since, kinds):
+        return bus.read(since, kinds)
+    if bus.waiters >= MAX_POLLERS:
+        return {"error": "too many long-polls", "retry_ms": RETRY_MS}, 429
+    return deferred(_long_poll(bus, since, kinds, int(timeout * 1000)))
 
 
 def body_limit(request):
