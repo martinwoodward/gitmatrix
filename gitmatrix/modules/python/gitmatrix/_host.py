@@ -2,7 +2,7 @@
 # current plugin(s), composites and presents. Plugins only ever run inside
 # loader.guard(), so a broken one can't take the host down with it.
 
-from gitmatrix import _audio, _compat, _events, _input, _menu, _notify, _runtime
+from gitmatrix import _audio, _compat, _events, _flash, _input, _log, _menu, _notify, _runtime
 
 PLUGIN = 0
 MENU = 1
@@ -169,6 +169,12 @@ class Host:
             for e in events:
                 bus.input(e)
             self.publish(bus, now)
+
+        for e in events:
+            if e.kind == _input.WIFI_RESET:
+                self.reset_wifi(now)
+                events = []
+                break
 
         if self.mode == MENU:
             if self.menu.frame(self.compositor.fb, events, now):
@@ -426,6 +432,22 @@ class Host:
         self.prev = None
         self.mode = MENU
         self.menu.open(now)
+
+    def reset_wifi(self, now):
+        """Knob held 10 s: forget the network and bring the setup AP back, in place
+        (housekeeping restarts the WiFi; no reboot)."""
+        _log.log("wifi: knob held 10 s, forgetting the network")
+        if self.mode == MENU:
+            self.menu.close()
+            self.menu_closed()
+        self.config.set("wifi_ssid", None)
+        self.config.set("wifi_password", None)
+        with _flash.pause():
+            self.config.save()
+        _runtime.wifi_restart_at = now
+        wifi = _runtime.wifi
+        ssid = wifi.ap_ssid if wifi is not None else "GitMatrix"
+        self.show_message(f"WiFi reset: join '{ssid}' then http://192.168.4.1", 15000, 25, now)
 
     def menu_closed(self):
         self.mode = PLUGIN

@@ -8,9 +8,11 @@ TURN = "turn"
 PRESS = "press"
 RELEASE = "release"
 LONG_PRESS = "long_press"
+WIFI_RESET = "wifi_reset"       # the knob held for WIFI_RESET_MS
 
 DEBOUNCE_MS = 30
 LONG_PRESS_MS = 1000
+WIFI_RESET_MS = 10000
 RING = 16
 
 ENCODER_PINS = (22, 21)
@@ -38,8 +40,11 @@ class Input:
         self._down_at = 0
         self._changed = 0
         self._long_sent = False
+        self._reset_sent = False
         if button is not None:
             self._down = button.value() == 0
+            # held at power-on means safe mode, not a WiFi reset
+            self._long_sent = self._reset_sent = self._down
 
     @classmethod
     def from_hardware(cls):
@@ -75,13 +80,16 @@ class Input:
                 self._changed = now
                 if down:
                     self._down_at = now
-                    self._long_sent = False
+                    self._long_sent = self._reset_sent = False
                     self.push(PRESS)
                 else:
                     self.push(RELEASE)
             elif self._down and not self._long_sent and _compat.ticks_diff(now, self._down_at) > LONG_PRESS_MS:
                 self._long_sent = True
                 self.push(LONG_PRESS)
+            elif self._down and not self._reset_sent and _compat.ticks_diff(now, self._down_at) >= WIFI_RESET_MS:
+                self._reset_sent = True
+                self.push(WIFI_RESET)
         return self.seq
 
     def held(self):

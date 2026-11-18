@@ -73,6 +73,8 @@ board: [phase0.md](../docs/gitmatrix/phase0.md)).
   **`monalisa`**, change it in `/gitmatrix_config.py`) at `http://192.168.4.1`, with a
   captive portal that lands on the WiFi page. Scan, pick a network, enter the password,
   **Save & join**. The device leaves setup mode and joins in place (no reboot).
+- Hold the knob for 10 s (once running) to forget the network: the setup AP comes back,
+  no reboot.
 - Network saved: it joins it as `gitmatrix.local` (hostname in Settings). The AP is off
   while connected. If the network can't be reached for 1 minute the setup AP comes back
   as well, while it keeps retrying; it goes away again once connected.

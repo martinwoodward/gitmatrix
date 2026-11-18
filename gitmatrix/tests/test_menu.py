@@ -266,6 +266,65 @@ def test_input_debounce_and_long_press(clock):
     assert inp.since(2)[-1].kind == "release"
 
 
+def test_input_wifi_reset_after_10s_hold_once(clock):
+    from gitmatrix._input import Input
+
+    class Btn:
+        level = 1
+
+        def value(self):
+            return self.level
+
+    b = Btn()
+    inp = Input(None, b)
+    b.level = 0
+    clock.advance(50)
+    inp.poll()
+    for _ in range(25):
+        clock.advance(500)
+        inp.poll()
+    kinds = [e.kind for e in inp.since(0)]
+    assert kinds == ["press", "long_press", "wifi_reset"]
+
+
+def test_input_held_at_power_on_is_not_a_wifi_reset(clock):
+    from gitmatrix._input import Input
+
+    class Btn:
+        def value(self):
+            return 0
+
+    inp = Input(None, Btn())
+    for _ in range(25):
+        clock.advance(500)
+        inp.poll()
+    assert inp.since(0) == []
+
+
+def test_knob_hold_forgets_wifi_and_starts_setup_ap_in_place(rig):
+    from gitmatrix import _boot, _runtime, _wifi
+    from stubs import FakeNetwork
+
+    make_plugin(rig.root, "clock", GOOD)
+    set_plugins(rig.root, ["clock"], wifi_ssid="home", wifi_password="secret123")
+    rig.net = FakeNetwork()
+    rt = rig.boot()
+    rig.net.sta.up = True
+    rt.wifi.tick(rig.clock.advance(500))
+    assert rt.wifi.mode == _wifi.CONNECTED
+    rig.input.push("press")
+    rig.frames()
+    assert rt.host.mode == _host.MENU
+    rig.input.push("wifi_reset")
+    rig.frames()
+    assert rt.host.mode != _host.MENU
+    assert rt.config.get("wifi_ssid") is None and rt.config.get("wifi_password") is None
+    assert "wifi_ssid = None" in (rig.root / "config.py").read_text()
+    _boot.housekeeping(rt, rig.clock.advance(16))
+    assert _runtime.wifi_restart_at is None
+    assert rt.wifi.mode == _wifi.SETUP and rig.net.ap.on and not rig.net.sta.on
+
+
 def test_input_ring_drops_oldest(clock):
     from gitmatrix._input import RING, Input
 
