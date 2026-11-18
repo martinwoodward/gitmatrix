@@ -191,7 +191,10 @@ def package_hash(files):
                     digest.update(chunk)
         else:
             digest.update(data)
-    return digest.hexdigest()[:HASH_LENGTH]
+    import binascii
+
+    # MicroPython's hashlib has digest() but no hexdigest()
+    return binascii.hexlify(digest.digest()).decode()[:HASH_LENGTH]
 
 
 # ---- HTTP -----------------------------------------------------------------------

@@ -23,6 +23,8 @@ def unsupported(tree):
         if (isinstance(node, ast.Attribute) and isinstance(node.ctx, ast.Load)
                 and isinstance(node.value, ast.Name) and node.value.id == "builtins"):
             yield node.lineno, f"reads builtins.{node.attr}"
+        if isinstance(node, ast.Attribute) and node.attr == "hexdigest":
+            yield node.lineno, "hashlib hexdigest() (MicroPython only has digest())"
 
 
 @pytest.mark.parametrize("path", SOURCES, ids=lambda p: str(p.relative_to(ROOT)))
