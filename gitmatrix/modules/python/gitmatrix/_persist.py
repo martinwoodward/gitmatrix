@@ -6,8 +6,10 @@
 # mem32. Don't use SCRATCH2-4 or POWMAN BOOT0-3 (bootrom/firmware). It sits behind
 # set_store() so the backend can be swapped.
 #
-# Every deliberate reboot goes through reset() (watchdog timeout), never
-# machine.reset(), so the mechanism can be changed in one place.
+# Every deliberate reboot goes through reset(): machine.soft_reset() with the
+# hardware watchdog stopped first. Warm resets (machine.reset(), a watchdog timeout,
+# picotool reboot) hang this board about 1 in 3 until a power cycle; soft resets
+# never have (docs/gitmatrix/ondevice.md). The watchdog is only a last resort.
 #
 # Marker layout, kept under 2**30 so MicroPython writes it without allocating:
 #   bits 29..24 MAGIC, 23..16 crc8(plugin name), 15..4 plugin index, 3..0 hook
@@ -156,14 +158,15 @@ def clear_all():
     clear_boot()
 
 
-def reset(timeout_ms=100, keep_boot=False):
-    """Reboot via a watchdog timeout. Never call machine.reset(). keep_boot leaves
-    the boot counter alone, so repeated crash-reboots still reach safe mode."""
+def reset(keep_boot=False):
+    """Restart via machine.soft_reset(), never a warm reset. The watchdog keeps
+    running across a soft reset, so it's stopped first (boot arms it again).
+    keep_boot leaves the boot counter alone, so repeated crash-reboots still reach
+    safe mode (mem_backup survives a soft reset)."""
     clear_mark()
     if not keep_boot:
         clear_boot()
     if machine is None:
         raise SystemExit("reboot")
-    machine.WDT(timeout=timeout_ms)
-    while True:
-        machine.idle()
+    disable_watchdog()
+    machine.soft_reset()

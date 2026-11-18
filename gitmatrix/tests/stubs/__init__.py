@@ -401,6 +401,11 @@ def install():
 
     machine.reset = _reset
 
+    def _soft_reset():
+        raise SystemExit("soft reboot")
+
+    machine.soft_reset = _soft_reset
+
     def _idle():
         if WDT.created:
             raise SystemExit("watchdog reboot")

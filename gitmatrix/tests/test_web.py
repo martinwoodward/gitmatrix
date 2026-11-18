@@ -120,7 +120,7 @@ def test_settings_saves_config(web):
     assert "reboot_required" not in ok("POST", "/api/v1/settings", {"hostname": "desk"})
 
 
-def test_wifi_save_writes_config_and_reboots_via_watchdog(web):
+def test_wifi_save_writes_config_and_reboots(web):
     r = ok("POST", "/api/v1/wifi", {"ssid": "office", "password": "letmein99"})
     assert r == {"ok": True, "rebooting": True, "ssid": "office", "url": "http://gitmatrix.local"}
     text = (web.root / "config.py").read_text()

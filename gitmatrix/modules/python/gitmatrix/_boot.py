@@ -249,4 +249,4 @@ def run():
                 _state.flush_all(force=True)
         except Exception:  # noqa: BLE001, S110 - rebooting regardless
             pass
-        _persist.reset(1000, keep_boot=True)
+        _persist.reset(keep_boot=True)
