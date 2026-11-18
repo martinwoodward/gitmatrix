@@ -225,6 +225,9 @@ async def _main(rt):
     if rt.wifi is not None and rt.wifi.net is not None:
         asyncio.create_task(_wifi(rt))
         asyncio.create_task(_store_task(rt))
+        from gitmatrix import _ntp
+
+        asyncio.create_task(_ntp.run(rt.wifi.connected))
         try:
             from gitmatrix import _web
 
