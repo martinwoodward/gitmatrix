@@ -202,19 +202,13 @@ def _wifi_mgr():
 
 # ---- status -----------------------------------------------------------------
 
-def _plugin_info(name):
+def _plugin_info(name, installed=None):
     cfg = _config()
     host = _host()
     loader = _runtime.loader
     q = cfg.get("quarantined", {})
     plugin = loader.plugins.get(name) if loader is not None else None
-    if plugin is not None:
-        title = plugin.title
-    else:
-        from gitmatrix import _loader
-
-        manifest = _loader.read_manifest(name)
-        title = manifest.get("name") if isinstance(manifest.get("name"), str) else name
+    title = plugin.title if plugin is not None else _static_info(name)["title"]
     info = {
         "name": name,
         "title": title,
@@ -227,24 +221,53 @@ def _plugin_info(name):
         "last_error": plugin.last_error if plugin is not None else None,
         "slow": bool(plugin.slow) if plugin is not None else False,
     }
-    info.update(_store_info(name))
+    info.update(_store_info(name, installed))
     return info
 
 
-def _store_info(name):
+# Flash reads stall the display (~5 ms per file, the web server shares the frame
+# loop), and the web UI polls /plugins, so per-plugin manifest facts are cached
+# until the store changes the installed set.
+_static = {}
+_static_key = None
+
+
+def _static_info(name):
+    global _static_key
     from gitmatrix import _loader, _store
 
-    manifest = _loader.read_manifest(name)
-    installed = _store.active()
+    key = (_runtime.plugins_dir(), _store.generation)
+    if key != _static_key:
+        _static.clear()
+        _static_key = key
+    info = _static.get(name)
+    if info is None:
+        manifest = _loader.read_manifest(name)
+        has_config = _compat.exists(_store.live_dir(name) + "/config.html")
+        title = manifest.get("name")
+        version = manifest.get("version")
+        info = _static[name] = {
+            "title": title if isinstance(title, str) else name,
+            "version": version if isinstance(version, str) else None,
+            "has_settings": bool(manifest.get("settings")) or has_config,
+            "has_config_html": has_config,
+        }
+    return info
+
+
+def _store_info(name, installed=None):
+    from gitmatrix import _store
+
+    static = _static_info(name)
+    installed = _store.active() if installed is None else installed
     store = _runtime.store
-    has_config = _compat.exists(_store.live_dir(name) + "/config.html")
     return {
-        "version": manifest.get("version") if isinstance(manifest.get("version"), str) else None,
+        "version": static["version"],
         "installed": name in installed,
         "builtin": name not in installed,
         "update_available": bool(store is not None and store.update_available(name, installed)),
-        "has_settings": bool(manifest.get("settings")) or has_config,
-        "has_config_html": has_config,
+        "has_settings": static["has_settings"],
+        "has_config_html": static["has_config_html"],
     }
 
 
@@ -366,9 +389,12 @@ def volume(request):
 
 @api("/plugins")
 def plugins(_request):
+    from gitmatrix import _store
+
     cfg = _config()
+    installed = _store.active()
     return {
-        "plugins": [_plugin_info(n) for n in cfg.get("plugins", [])],
+        "plugins": [_plugin_info(n, installed) for n in cfg.get("plugins", [])],
         "now_showing": _now_showing(),
         "delay": cfg.get("delay", 30),
     }
@@ -1343,7 +1369,24 @@ def body_limit(request):
     return MAX_BODY
 
 
-def _memory():
+# gc.mem_free()/mem_alloc() walk the whole 8 MB PSRAM heap (~100 ms each) and
+# statvfs takes ~20 ms, freezing the display. /status is polled, so it gets
+# values at most STATS_TTL_MS old; /system (opened by hand) reads fresh.
+STATS_TTL_MS = 60_000
+_stats = {}  # name -> (ticks, value, key)
+
+
+def _cached(name, fn, fresh, key=None):
+    now = _compat.ticks_ms()
+    hit = _stats.get(name)
+    if not fresh and hit is not None and hit[2] == key and _compat.ticks_diff(now, hit[0]) < STATS_TTL_MS:
+        return hit[1]
+    value = fn()
+    _stats[name] = (now, value, key)
+    return value
+
+
+def _read_memory():
     import gc
 
     try:
@@ -1352,7 +1395,11 @@ def _memory():
         return None
 
 
-def _flash_space():
+def _memory(fresh=False):
+    return _cached("memory", _read_memory, fresh)
+
+
+def _read_flash():
     import os
 
     try:
@@ -1360,6 +1407,12 @@ def _flash_space():
     except (OSError, AttributeError):
         return None
     return {"total": st[1] * st[2], "free": st[1] * st[3]}  # block counts are in f_frsize units
+
+
+def _flash_space(fresh=False):
+    from gitmatrix import _store
+
+    return _cached("flash", _read_flash, fresh, (_runtime.path("/"), _store.generation))
 
 
 @api("/system")
@@ -1374,8 +1427,8 @@ def system(_request):
         "version": gitmatrix.VERSION,
         "micropython": ".".join(str(v) for v in impl[:3]),
         "uptime_ms": _compat.ticks_diff(_compat.ticks_ms(), _rt.booted) if _rt is not None else None,
-        "memory": _memory(),
-        "flash": _flash_space(),
+        "memory": _memory(fresh=True),
+        "flash": _flash_space(fresh=True),
         "audio_pauses": _flash.pauses,
         "safe_mode": _host().safe_mode if _host() is not None else None,
         "quarantined": _config().get("quarantined", {}),

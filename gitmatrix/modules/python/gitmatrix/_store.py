@@ -299,8 +299,13 @@ def active():
     return {k: v for k, v in data.items() if isinstance(v, dict) and _compat.valid_name(k)}
 
 
+generation = 0  # bumped whenever the installed set changes; lets callers cache per-plugin info
+
+
 def _write_active(data):
+    global generation
     _write_json(_runtime.path(ACTIVE), data)
+    generation += 1
 
 
 def live_dir(name):

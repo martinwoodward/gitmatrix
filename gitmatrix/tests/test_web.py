@@ -459,6 +459,40 @@ def get(path, **kw):
     return resp
 
 
+def test_plugins_listing_caches_flash_reads_until_store_changes(web, monkeypatch):
+    from gitmatrix import _loader, _store
+
+    reads = []
+    real = _loader.read_manifest
+    monkeypatch.setattr(_loader, "read_manifest", lambda n: reads.append(n) or real(n))
+    ok("GET", "/api/v1/plugins")
+    first = len(reads)
+    assert first and len(set(reads)) == first  # one manifest read per plugin
+    ok("GET", "/api/v1/plugins")
+    assert len(reads) == first  # the web UI's 5 s poll doesn't touch flash again
+    make_plugin(web.root, "one", GOOD, {"name": "One", "version": "2.0"})
+    _store._write_active({})  # what install/update/remove do
+    p = ok("GET", "/api/v1/plugins")
+    assert len(reads) == 2 * first and p["plugins"][0]["version"] == "2.0"
+
+
+def test_status_does_not_walk_the_heap_every_poll(web, monkeypatch):
+    import gc
+
+    walks = []
+    monkeypatch.setattr(gc, "mem_free", lambda: walks.append(1) or 1000, raising=False)
+    monkeypatch.setattr(gc, "mem_alloc", lambda: 500, raising=False)
+    monkeypatch.setattr(_web, "_stats", {})
+    assert ok("GET", "/api/v1/status")["memory"] == {"free": 1000, "used": 500}
+    ok("GET", "/api/v1/status")
+    assert len(walks) == 1
+    web.clock.advance(_web.STATS_TTL_MS)
+    ok("GET", "/api/v1/status")
+    assert len(walks) == 2
+    ok("GET", "/api/v1/system")  # opened by hand: always fresh
+    assert len(walks) == 3
+
+
 def types(out):
     return [e["type"] for e in out["events"]]
 

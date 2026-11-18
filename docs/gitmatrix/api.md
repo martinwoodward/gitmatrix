@@ -81,7 +81,7 @@ curl -s -H "$AUTH" $GM/status
 | `encoder.position` | net knob detents since boot (+ clockwise). `encoder.last` is the last knob event, in the same shape as the [events](#get-events) |
 | `input` | the raw last input event (kept for compatibility) |
 | `events.seq`, `events.boot` | the newest event's seq and this boot's id; see below |
-| `memory`, `flash` | bytes free/used (RAM) and free/total (filesystem) |
+| `memory`, `flash` | bytes free/used (RAM) and free/total (filesystem). Up to a minute old here, as measuring RAM stalls the display for ~200 ms; `GET system` reads them fresh |
 | `notifications` | the active note, the queue, counters (as `GET notify`) |
 
 ### `GET events`
