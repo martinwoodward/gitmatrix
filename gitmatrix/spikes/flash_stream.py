@@ -3,6 +3,8 @@
 # exactly which step hung. Driven by flash_host.py (handles audio + hang detection).
 #   MODE = 'escalate' : connected-idle writes, then streaming writes by size/type
 #   MODE = 'deinit'   : streaming -> bt_audio.deinit() -> 64 KB write + rename
+#   MODE = 'threshold': streaming writes of 16 KB then 32 KB (informational)
+#   MODE = 'i2s'      : open machine.I2S and play a 1 kHz tone while A2DP streams
 import bt_audio, os, time, gc
 
 MODE = 'escalate'
@@ -74,6 +76,22 @@ def main():
         step('stream_write_8k', write('/_c.tmp', 8192))
         step('stream_write_64k', write('/_c.tmp', 65536))
         rm('/_b.tmp'); rm('/_c.tmp')
+    elif MODE == 'threshold':
+        print('START_STREAM')
+        print('STREAMING after', wait_for(bt_audio.streaming, 30), 'ms')
+        time.sleep(3)
+        step('stream_write_16k', write('/_c.tmp', 16384))
+        step('stream_write_32k', write('/_c.tmp', 32768))
+        rm('/_c.tmp')
+    elif MODE == 'i2s':
+        import i2s_tone
+        print('START_STREAM')
+        print('STREAMING after', wait_for(bt_audio.streaming, 30), 'ms')
+        time.sleep(4)
+        print('TONE_START', time.ticks_ms())
+        step('i2s_tone_3s', lambda: i2s_tone.play(3, 1000))
+        print('TONE_END', 'streaming', bt_audio.streaming())
+        time.sleep(4)
     else:
         print('START_STREAM')
         print('STREAMING after', wait_for(bt_audio.streaming, 30), 'ms')

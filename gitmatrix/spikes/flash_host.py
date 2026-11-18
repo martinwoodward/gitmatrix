@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Host driver for flash_stream.py: streams audio on START_STREAM, flags a hang after
 25 s of silence, and always restores the Mac's output device.
-Usage: flash_host.py [escalate|deinit]   (user must connect the Mac to 'Widget')."""
+Usage: flash_host.py [escalate|deinit|threshold|i2s]  (connects the Mac to 'Widget' via blueutil)."""
 import os
 import queue
 import signal
@@ -47,6 +47,9 @@ try:
         print(line, end='', flush=True)
         if line.startswith('WAITING_FOR_SOURCE'):
             waiting = True
+            time.sleep(2)
+            subprocess.run(['blueutil', '--connect', '28-cd-c1-19-6a-19'])
+            print('HOST: blueutil --connect issued', flush=True)
         elif line.startswith('CONNECTED'):
             waiting = False
         elif line.startswith('START_STREAM'):

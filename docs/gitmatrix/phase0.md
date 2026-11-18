@@ -2,7 +2,9 @@
 
 Status: spikes 1, 2 (a/b/d), 3, 5 done; **spike 4 found a hard hang**: a large flash write
 while A2DP is streaming locks the device. Warm-reset characterisation and the 2c/flash-threshold
-follow-ups are pending. Device files are back to stock (temp files and WiFi creds removed).
+follow-ups are pending. **Pending (device hung, waiting for a replug):** 16/32 KB threshold test,
+I2S-while-streaming, warm-reset harness, and the final device cleanup (the hung run may have left
+`/wifi_tmp.json` and `/_*.tmp` on the device).
 
 ## Key findings / rules for the plan
 
@@ -143,6 +145,47 @@ manual power cycle. Options: (a) find a reset recipe that's 100% reliable (e.g. 
 reset oscillators via PSM WDSEL, close USB CDC first), then use it; (b) treat WDT as last resort
 and show "power cycle me" on screen in safe mode; (c) ask Pimoroni to fix warm boot in the board firmware.
 `gitmatrix/spikes/wdt_harness.py` is a ready-made, self-driving harness for (a) (not yet run).
+
+## Recommendations (from results so far)
+
+Pending tests may refine these; they won't loosen rule 1.
+
+1. **Single flash writer, gated on streaming.** Every flash write (state saves, config, WiFi
+   credentials, plugin install, link keys) goes through one writer task:
+   - not streaming: write now, using temp + `os.rename`;
+   - streaming: queue it and flush when `bt_audio.streaming()` goes false. Use a coalescing
+     queue for state (last-write-wins), and debounce saves of 5 s or more;
+   - user-initiated writes that can't wait (plugin install, WiFi save from the setup portal):
+     pause the sink (`bt_audio.deinit()` -> write -> `init()`, about 0.1-1.1 s) and show
+     "audio paused". The source may have to reconnect manually.
+   Enforce this in the runtime, not by convention. `open(..., 'w')` outside the writer should
+   be a lint/review failure.
+2. **Notification sounds.** When not streaming, play directly with `machine.I2S(0, sck=9, ws=10, sd=8)`
+   plus AMP_EN GP11. No `bt_audio` deinit is needed; open takes about 1 ms. Use the left channel
+   only, or put the same samples in both channels. While streaming, skip or defer the chime and
+   flash the display instead, unless the pending I2S-while-streaming test shows a clean mix.
+   Ask Pimoroni for a `bt_audio` PCM-mix/"play" API.
+3. **Crash marker / boot-loop counter.** Use `machine.mem_backup()[0]` (marker) and `[1]`
+   (counter): they're 32-bit, survive soft and WDT resets and are zero on power-up. Never touch
+   WD SCRATCH2-7 or POWMAN BOOT0-3. If a 16-bit spare is needed, POWMAN SCRATCH0-3 is an
+   alternative.
+4. **Reset policy.** Don't rely on WDT/`machine.reset()` coming back until the harness has
+   re-measured it without BambuStudio. Until then:
+   - prefer a soft reset (`machine.soft_reset()`) for "restart the app" paths;
+   - keep the WDT as a last resort, with a generous timeout (8 s);
+   - on a boot-loop or crash marker, enter safe mode with "unplug & replug" on screen.
+5. **WiFi.** Connect STA before starting `bt_audio` where possible, or accept a short dropout
+   during association (about 70 underruns over 8 s). Scans, HTTP/TLS fetches and the
+   setup-portal AP are safe while streaming. Monitor `ring_level()`, not `underruns()`,
+   which resets.
+6. **Raise with Pimoroni:**
+   - flash-write hang while A2DP streams (64 KB; likely core 1/XIP starvation during
+     erase/program);
+   - unreliable warm boot;
+   - no PCM playback/mix API in `bt_audio`.
+7. **Dev hygiene.** Close BambuStudio (and anything else that probes serial ports) when working
+   with the widget. It caused "port in use" errors and is a suspect for the enumeration
+   failures.
 
 ## Resume here (paused for app restart)
 
