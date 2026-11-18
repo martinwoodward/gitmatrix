@@ -292,6 +292,87 @@ curl -s -H "$AUTH" -H 'Content-Type: audio/wav' --data-binary @bell.wav $GM/soun
 | `GET store/install` | `{"install": progress}` for the install in progress |
 | `POST plugins/{name}/remove` | `{keep_data: true, pause_audio?}` |
 
+## MQTT and Home Assistant
+
+### `GET/POST mqtt`
+
+Optional MQTT client with Home Assistant discovery, off by default. `POST` takes any subset of
+the fields below, validates all of them (400 and nothing changes on an error) and applies them
+straight away: the client says goodbye and reconnects with the new settings. No reboot. While
+Bluetooth audio plays, the change takes effect at once and is saved to flash when playback stops.
+
+| Field | |
+|---|---|
+| `enabled` | boolean, default `false`. Turning it on needs a `host` |
+| `host` | broker IP address (recommended) or host name, up to 128 characters. A name is looked up with a blocking DNS call, cached for 30 min; `.local` names may not resolve |
+| `port` | 1-65535, or `null` for `default_port` (1883, or 8883 with TLS) |
+| `user` | user name, or `null` |
+| `password` | write-only; `""` or `null` clears it. `GET` shows `password_set` |
+| `tls` | boolean. Encrypted, but the broker's certificate is **not** checked (`CERT_NONE`, like the plugin store) |
+| `discovery` | boolean, default `true`: publish Home Assistant discovery config (retained) |
+| `discovery_prefix` | default `homeassistant` |
+| `base_topic` | `null` for `default_base_topic` (`gitmatrix/<hostname>`). `topic` is the one in use |
+
+`GET` (and `POST`) also returns `status`: `{state, connected, reason, broker, base_topic,
+node_id, last_error, retry_in_s, connected_for_s, connects, published, received, commands,
+dropped}`. `state` is `disabled`, `waiting` (`reason`: `no WiFi` or `waiting for audio to
+stop`), `connecting`, `connected` or `backoff` (retry in 2 s, doubling up to 5 min);
+`unavailable` until WiFi has connected once after boot.
+
+```sh
+curl -X POST $GM/mqtt -H 'Content-Type: application/json' \
+  -d '{"enabled": true, "host": "192.168.1.10", "user": "gitmatrix", "password": "..."}'
+```
+
+### Topics
+
+`<base>` is `base_topic`. Everything is MQTT 3.1.1, QoS 0. State topics are retained and sent
+on connect and whenever they change; numbers are 0-100.
+
+| Topic | Payload |
+|---|---|
+| `<base>/availability` | `online` / `offline` (retained; `offline` is the last will) |
+| `<base>/plugin` | the current plugin's name |
+| `<base>/mode` | `plugin`, `menu` or `notification` |
+| `<base>/brightness`, `<base>/volume` | `0`-`100` |
+| `<base>/alert_sound` | `ON` / `OFF` |
+| `<base>/bluetooth` | `{"connected": true, "streaming": false}` |
+| `<base>/wifi` | `{"connected": true, "ip": "192.168.1.42"}` |
+| `<base>/notification` | `{"showing": true, "id": "n4"}` |
+| `<base>/encoder/position` | cumulative knob detents |
+| `<base>/encoder` | not retained: `{"event_type": "turn_cw"\|"turn_ccw"\|"press"\|"long_press", "position": 3}` per knob action (at most 16 wait to be sent; extra ones count in `dropped`) |
+| `<base>/encoder/action` | not retained: the same event type as plain text (for device triggers) |
+| `<base>/result` | not retained: `{"command": "notify", "ok": true, ...}` after each command, or `ok: false` + `error` |
+
+Commands (retained messages on these topics are ignored, so they never re-run on reconnect):
+
+| Topic | Payload |
+|---|---|
+| `<base>/plugin/set` | a plugin name: show it |
+| `<base>/plugin/next`, `<base>/plugin/prev` | anything |
+| `<base>/brightness/set`, `<base>/volume/set` | `0`-`100` |
+| `<base>/alert_sound/set` | `ON` / `OFF` |
+| `<base>/notify` | plain text, or the same JSON object as `POST notify`. `result` has the `id` |
+| `<base>/notify/dismiss` | a notification id, or empty / `PRESS` for all |
+| `<base>/sound` | a sound name, or the same JSON object as `POST sound` |
+
+```sh
+mosquitto_pub -h 192.168.1.10 -t gitmatrix/gitmatrix/notify -m '{"text": "Build passed", "color": "#2da44e", "sound": "chime"}'
+mosquitto_sub -h 192.168.1.10 -t 'gitmatrix/gitmatrix/#' -v
+```
+
+### Home Assistant discovery
+
+With `discovery` on, the device appears as **GitMatrix** (identifier `gitmatrix_<chip id>`) with:
+a **Plugin** select (the enabled plugins), **Next/Previous plugin** buttons, **Brightness** and
+**Volume** numbers, an **Alert sounds** switch, a **Notify** entity, a **Dismiss notification**
+button, a **Play sound** select (built-in and custom sounds), a **Knob** event entity, a **Knob
+position** sensor, **Notification showing** / **Bluetooth connected** / **Bluetooth audio
+playing** binary sensors, **IP address** and **Mode** sensors, and device triggers
+`button_short_press`, `button_long_press`, `turn_cw`, `turn_ccw` (subtype `knob`). It listens
+to `<discovery_prefix>/status` and republishes everything when Home Assistant restarts.
+Turning discovery off, or changing the prefix, base topic or broker, removes the old entities.
+
 ## Settings, WiFi, Bluetooth, system
 
 ### `GET/POST settings`

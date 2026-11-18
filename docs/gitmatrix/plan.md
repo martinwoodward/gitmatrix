@@ -172,7 +172,7 @@ Built in phase 5; full reference in [api.md](api.md), design as built in §8.
 - `GET /api/v1/plugins`; `POST /api/v1/plugins/{name}/show` (no body = switch; `{data, duration}` = temporary, through the notification path); `POST /api/v1/plugins/next|prev`; `POST /api/v1/plugins/{name}/enable|disable`; `GET/POST /api/v1/plugins/{name}/settings` (secrets write-only).
 - `GET/POST /api/v1/brightness`, `/api/v1/volume`; `POST/DELETE /api/v1/sound` (alert policy, `force`); `POST/DELETE /api/v1/notify`.
 - `GET /api/v1/events?since=<seq>&timeout=<s>&types=` long-poll for encoder/plugin/mode/notification/bluetooth/wifi/brightness/volume events.
-- Phase 6: **async** MQTT client (e.g. `mqtt_as`-style, not blocking `umqtt.simple`) with HA discovery: `light`, `number` (volume), `select` (plugin), `sensor` (encoder), `event` (button/rotation), `notify`, `button` (next/prev), `binary_sensor` (streaming).
+- Phase 6 (as built, §9): **async** MQTT 3.1.1 client on asyncio streams (not blocking `umqtt.simple`) with HA discovery: `select` (plugin, play sound), `number` (brightness, volume), `switch` (alert sounds), `notify`, `button` (next/prev, dismiss), `event` (knob) + device triggers, `sensor` (knob position, IP, mode), `binary_sensor` (notification, BT connected, streaming). Brightness is a `number` rather than a `light` (the panel has no on/off or colour).
 
 ## 3. Repos
 - **This repo** (`martinwoodward/ghcontrib`, to be renamed `gitmatrix` and later made public) gets the firmware mirroring artmatrix, alongside the archived original firmware: `modules/python/{gitmatrix/,phew/,fetch.py,wifi.py,plugin_config.py,scrolling.py,timezones.py}`, `firmware/{main.py,lib/,html/,defaults/,sounds/,assets/}`, `ci/`, `tools/deploy.py` (mpremote sync). First releases = **filesystem bundle on the existing 1.29 UF2**; `board/` + UF2 CI later once Pimoroni sources are available.
@@ -186,7 +186,7 @@ Built in phase 5; full reference in [api.md](api.md), design as built in §8.
 3. **Plugin store** ✅ (host-tested; on-device checks in §5.2, design as built in §6): repo from `/gitmatrix_config.py`, index cache, discover/search, transactional install/update/remove, settings schema + secrets, state API, single flash writer (no writes while A2DP streams).
 4. **Notifications** ✅ (host-tested; on-device checks in §5.3, design as built in §7): API, queue, limits, text/PNG renderer + scroll/scale rules, plugin-forcing, sounds (silent while streaming, opt-in interrupt), custom sounds, quiet hours.
 5. **REST API v1 complete** ✅ (host-tested; on-device checks in §5.4, design as built in §8, reference in [api.md](api.md)): status, events long-poll, plugins show with data/duration, sound, brightness/volume.
-6. **Home Assistant**: async MQTT + discovery.
+6. **Home Assistant** ✅ (host-tested; on-device checks in §5.5, design as built in §9, reference in [api.md](api.md#mqtt-and-home-assistant)): optional async MQTT client + discovery, configured on the Settings page, applied without a reboot.
 7. **Docs**: porting guide, compatibility table, plugin template, examples.
 
 ## 5. Testing
@@ -252,6 +252,21 @@ Built in phase 5; full reference in [api.md](api.md), design as built in §8.
 - [ ] `gc.mem_free()` before and after 500 long-polls (no leak).
 - [ ] With an API token set, every `/api/v1/*` route gives 401 without it; the pages still work.
 
+### 5.5 Phase 6 on-device checklist (not yet run; host harness only)
+- [ ] `asyncio.open_connection(host, port, ssl=ctx)` works on 1.29 (plain and TLS to 8883 with `CERT_NONE`); `ssl` vs `tls` module import; `Stream.readexactly` and `asyncio.wait_for_ms` exist.
+- [ ] Enable on the Settings page with the broker's IP: status goes `connected` without a reboot; `mosquitto_sub -t 'gitmatrix/#' -v` shows retained state and `availability online`.
+- [ ] Host name broker: `getaddrinfo` of a normal DNS name works (how long does it block?); a `.local` name fails cleanly to `backoff` with `last_error`.
+- [ ] Home Assistant discovers the **GitMatrix** device with every entity; plugin select, next/prev, brightness/volume, alert sound switch, notify, dismiss and play sound all work, and state follows knob/menu/web changes.
+- [ ] Device triggers (short/long press, turn cw/ccw) fire HA automations; knob spam (fast turns) doesn't lag the display and `status.dropped` counts any overflow.
+- [ ] Bluetooth streaming for 10 minutes with MQTT connected and knob spam / notify commands: no extra underruns (`audio_pauses`), no stalls.
+- [ ] Pull the power: HA shows the device unavailable (LWT) within ~1.5× keepalive; on boot it comes back `online`.
+- [ ] Restart the broker / HA: the client backs off and reconnects; HA restart (`homeassistant/status online`) republishes discovery and state.
+- [ ] Wrong password: status shows `bad user name or password` and retries with growing backoff; WiFi is never asked to reconnect by MQTT.
+- [ ] Change settings while connected (base topic, discovery off, broker): reconnects in place, old discovery entities disappear, no reboot.
+- [ ] Save MQTT settings while streaming: applied at once, flash write deferred until playback stops (no hang).
+- [ ] With TLS on and audio streaming, a dropped connection waits (`waiting for audio to stop`) instead of handshaking mid-stream.
+- [ ] `gc.mem_free()` stable over 1 hour connected with periodic commands (no leak).
+
 ## 6. Phase 3 (plugin store) as built
 
 Host-tested (`gitmatrix/tests/test_store.py`, `test_flash.py`); on-device checks in §5.2.
@@ -311,3 +326,17 @@ Host-tested (`gitmatrix/tests/test_events.py`, `test_web.py`); on-device checks 
 - **Sound**: `POST /api/v1/sound` runs the same `sound_policy` as notifications (`off`/`quiet`/`streaming`/`play`/`interrupt`, `busy` if a sound is playing); `force` skips `off` and quiet hours but never talks over Bluetooth audio unless the interrupt policy allows it. URLs are fetched in a background task (errors in `last_result`). `DELETE /api/v1/sound` stops it.
 - **Web UI**: System page **Developer** section: request builder (method, path, JSON body, response) and a live event watcher (long-poll loop, last 50 events, stops on `pagehide`).
 - No new reboot paths and no flash writes.
+
+## 9. Phase 6 (MQTT + Home Assistant) as built
+
+Host-tested (`gitmatrix/tests/test_mqtt.py`, with a fake asyncio broker); on-device checks in §5.5; reference in [api.md](api.md#mqtt-and-home-assistant).
+
+- **Client** (`gitmatrix/_mqtt.py`, `_runtime.mqtt`): a minimal MQTT 3.1.1 client, QoS 0 only, on asyncio streams; no `umqtt`. Started by `_boot` once STA WiFi is up (setup/AP mode has no MQTT). States `disabled` → `waiting` → `connecting` → `connected` → `backoff` (2 s doubling to 5 min, reset on a good connection). Keepalive 60 s, ping after 30 s idle, reconnect after 90 s without a byte from the broker. Connect, CONNACK and writes time out after 10 s.
+- **Never blocks**: the event-bus listener (`bus.subscribe`) runs in the frame, so it only notes a dirty key or appends a knob action to a list capped at 16 (overflow counted in `dropped`) and sets an `asyncio.Event`; it does nothing unless connected. One writer task publishes; one reader task handles commands and PINGRESP. Inbound packets over 64 KB are drained and dropped. Command results are capped at 4.
+- **Audio and WiFi**: it waits for WiFi rather than reconnecting it (association makes A2DP stutter). While A2DP streams it won't start a TLS handshake or an uncached DNS lookup (both block); a plain connection to an IP still goes ahead. DNS answers are cached in RAM for 30 min.
+- **State**: retained topics from `bus.state` plus config (`plugin`, `mode`, `brightness`, `volume`, `alert_sound`, `bluetooth`, `wifi`, `notification`, `encoder/position`); knob actions go to `encoder` (JSON) and `encoder/action` (plain). Availability uses the LWT.
+- **Commands** reuse the REST paths: `notify` → `notifier.submit` (same JSON as `POST /notify`); `sound` → `_web.play_request` (shared with `POST /sound`, so the same `sound_policy`); plugin show/step, brightness/volume (`apply_*`), alert sound. Retained commands are ignored. Config changes from commands mark the config dirty, so housekeeping saves them through `_flash` (deferred while streaming).
+- **Discovery**: per-entity retained config under `<prefix>/<component>/<node>/<object>/config` with `unique_id`, `availability_topic`, `device` and `origin`; republished on `<prefix>/status` = `online` and when the plugin rotation changes. Removed (empty retained payloads) when discovery is turned off or the prefix/base/broker changes while connected. Known gap: if MQTT is disabled first and then reconfigured, the old entities stay until deleted in HA.
+- **Settings**: `mqtt_enabled`, `mqtt_host`, `mqtt_port`, `mqtt_user`, `mqtt_password` (write-only, never returned), `mqtt_tls`, `mqtt_discovery`, `mqtt_discovery_prefix`, `mqtt_base_topic` in `/config.py`; `GET/POST /api/v1/mqtt` validates all-or-nothing, saves when `_flash.can_write()` (else housekeeping saves later) and calls `reconfigure()`, which sends `offline` + DISCONNECT and reconnects. **No reboot path.**
+- **Web UI**: Settings page **MQTT & Home Assistant** section (fields, password set/clear, live status line).
+- **Security**: TLS uses `CERT_NONE` (no certificate check), like the plugin store. The password is stored in `/config.py` in plain text like the WiFi password.

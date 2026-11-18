@@ -27,13 +27,14 @@ gitmatrix/
       _state     per-plugin state and typed settings (schema, secrets in /secrets)
       _store     plugin store: index cache, transactional install/update/remove, boot reconcile
       _flash     the single flash writer: no writes while Bluetooth audio streams
-      _events    event bus: ring of seq-numbered events + latest state (long-poll, MQTT later)
+      _events    event bus: ring of seq-numbered events + latest state (long-poll, MQTT)
       _notify    notification validation, queue, quiet hours, sound policy, renderer
       _sounds    built-in/custom sounds, uploads, I2S playback
       _png       PNG size checks, fit to 7 rows, decode
       _config    /config.py load / migrate / save-in-place
       _persist   crash marker + boot counter (machine.mem_backup()[0..1]), watchdog reboot
       _wifi      STA / setup AP / fallback AP state machine, mDNS name, scans, captive DNS
+      _mqtt      optional async MQTT client + Home Assistant discovery (off by default)
       _web       phew routes: JSON API under /api/v1, token auth, static pages, captive redirect
       _log       in-RAM log ring (shown on the System page; never written to flash)
       glow       shared drawing helpers for built-in plugins
@@ -103,6 +104,27 @@ can send calls and watch events):
 | `GET/POST /config?plugin=<name>` | the plugin's own Art Matrix-style `config.html` |
 | `GET/POST/DELETE notify` | status; send a notification (202 + id); dismiss (`?id=` for one) |
 | `GET sounds`, `GET/POST/DELETE sounds/<name>`, `POST sounds/<name>/play` | list; upload a WAV (raw `audio/wav` body or `{"data": base64}`), delete, play |
+| `GET/POST mqtt` | MQTT broker settings (password write-only) + connection status; applied without a reboot |
+
+## MQTT and Home Assistant
+
+Off by default. Turn it on in **Settings → MQTT & Home Assistant** (or `POST /api/v1/mqtt`)
+with the broker's address, e.g. Home Assistant's Mosquitto add-on. Use an IP address: a
+host name is resolved with a blocking lookup and `.local` names may not resolve. With
+discovery on (the default), a **GitMatrix** device appears in Home Assistant with:
+
+- **Plugin** select (the enabled plugins), **Next/Previous plugin** buttons
+- **Brightness** and **Volume** numbers, **Alert sounds** switch
+- **Notify** entity (plain text, or the same JSON as `POST /api/v1/notify`), **Dismiss notification** button, **Play sound** select
+- **Knob** event entity plus device triggers (turn clockwise/anticlockwise, short/long press) and a **Knob position** sensor
+- **Notification showing**, **Bluetooth connected**, **Bluetooth audio playing** binary sensors; **IP address** and **Mode** sensors
+- availability through the broker's last will (`<base>/availability`: `online`/`offline`)
+
+The client runs as asyncio tasks with bounded queues and never blocks the display or audio.
+It waits for WiFi (and never asks WiFi to reconnect), retries with backoff (2 s up to 5 min),
+and while Bluetooth audio plays it postpones TLS handshakes and DNS lookups. Settings changes
+reconnect in place: no reboot. Topics and payloads are in
+[docs/gitmatrix/api.md](../docs/gitmatrix/api.md#mqtt-and-home-assistant).
 
 ## Notifications and sounds
 
