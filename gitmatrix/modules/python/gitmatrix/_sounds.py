@@ -240,7 +240,7 @@ def _scale(src, dst, n: int, vol: int):
 
 
 def _volume(config):
-    vol = config.get("volume", 64) if config is not None else 64
+    vol = config.get("volume", 32) if config is not None else 32
     return max(0, min(128, (int(vol) * 128 + 63) // 127))
 
 

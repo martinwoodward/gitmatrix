@@ -343,7 +343,7 @@ def status(_request):
 # ---- brightness / volume ----------------------------------------------------
 
 def _volume_percent():
-    return int(_config().get("volume", 64) * 100 / 127 + 0.5)
+    return int(_config().get("volume", 32) * 100 / 127 + 0.5)
 
 
 @api("/brightness", ("GET", "POST"))

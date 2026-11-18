@@ -649,7 +649,7 @@ class Mqtt:
         if key == _events.BRIGHTNESS:
             return str(cfg.get("brightness", 60))
         if key == _events.VOLUME:
-            return str(int(cfg.get("volume", 64) * 100 / 127 + 0.5))
+            return str(int(cfg.get("volume", 32) * 100 / 127 + 0.5))
         if key == "alert_sound":
             return "ON" if cfg.get("alert_sound", True) else "OFF"
         if key == "position":

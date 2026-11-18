@@ -496,7 +496,7 @@ class Host:
             bus.change(_events.BRIGHTNESS, self.config.get("brightness", 60))
 
     def menu_get_volume(self):
-        return self.config.get("volume", 64) / 127
+        return self.config.get("volume", 32) / 127
 
     def menu_set_volume(self, level, save):
         self.config.values["volume"] = int(level * 127 + 0.5)
@@ -506,7 +506,7 @@ class Host:
 
     def apply_volume(self):
         if self.audio is not None:
-            self.audio.set_volume(self.config.get("volume", 64) / 127)
+            self.audio.set_volume(self.config.get("volume", 32) / 127)
         bus = _runtime.events
         if bus is not None:
             bus.change(_events.VOLUME, volume_percent(self.config))
@@ -550,4 +550,4 @@ def _plugin_input():
 
 def volume_percent(config):
     """The 0-127 config volume as 0-100."""
-    return int(config.get("volume", 64) * 100 / 127 + 0.5)
+    return int(config.get("volume", 32) * 100 / 127 + 0.5)

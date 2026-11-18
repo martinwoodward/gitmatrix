@@ -18,7 +18,7 @@ transition = "slide"
 
 # Display brightness 0-100, speaker volume 0-127
 brightness = 60
-volume = 64
+volume = 32
 
 # Notification sounds. Quiet hours ("HH:MM" local time; a window past midnight
 # belongs to the day it starts on) mute alerts on the listed days (0 = Monday).
