@@ -207,6 +207,16 @@ def test_auto_rotation(rig):
     assert rt.host.current.name == "two"
 
 
+def test_show_of_current_plugin_restarts_its_dwell(rig):
+    rt = boot_two(rig, delay=1)
+    rig.frames(50)  # 800 ms of one's 1 s
+    assert rt.host.show("one")
+    rig.frames(50)
+    assert rt.host.current.name == "one"
+    rig.frames(20)
+    assert rt.host.current.name == "two"
+
+
 def test_input_plugin_gets_turns_not_rotation(rig):
     make_plugin(rig.root, "knob", TURNER, {"name": "Knob", "input": True})
     make_plugin(rig.root, "other", GOOD)

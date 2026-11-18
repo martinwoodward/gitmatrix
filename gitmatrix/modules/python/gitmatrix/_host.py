@@ -117,6 +117,7 @@ class Host:
             self.show_message(f"{name} failed to load", 3000, 25)
             return False
         self._enter(plugin, now)
+        self.entered = now  # an explicit show gets a full dwell, even if already on screen
         self.prev = None
         return True
 
