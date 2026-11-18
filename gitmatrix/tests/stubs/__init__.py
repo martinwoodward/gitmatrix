@@ -302,6 +302,9 @@ class FakeBT:
     def fft_seq(self):
         return self.seq
 
+    def sample_rate(self):
+        return getattr(self, "rate", 44100)
+
     def fft_into(self, buf):
         for i in range(min(len(buf), len(self.bins))):
             buf[i] = self.bins[i]

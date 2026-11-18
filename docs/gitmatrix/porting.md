@@ -39,7 +39,7 @@ This guide lists every difference and ends with a worked example. The full API i
 | Rotation | the runtime rotates enabled plugins on a timer (`delay`) |
 | Settings | `from plugin_config import plugin_config` with the same type rules (bool = key present, tuple = `#rrggbb`, int/float coerced) |
 | Config page | `config.html` served at `/config?plugin=<name>`, `{{ plugin }}` and `{{ placeholder.X }}` (the plugin module), `process_config(form)` if defined, a `reset` field deletes the saved form, the plugin is reloaded after a save, `<form data-autosave>` saves on change, a "Reset to defaults" button is added for plugins without `process_config` |
-| Audio analysis | `mic.level()`, `tone()`, `flux()`, `intensity()`, `active()`, `bpm()`, `phase()`, `beat()`, `kick()`, `clap()`, `spectrum()` (16 bands, 0-1, same array each call) |
+| Audio analysis | `mic.level()`, `tone()`, `flux()`, `intensity()`, `active()`, `bpm()`, `phase()`, `beat()`, `kick()`, `clap()`, `spectrum()` (16 bands, 0-1, same array each call; 60 Hz – 16 kHz, see [Spectrum bands](plugin-api.md#spectrum-bands)) |
 | Helpers | `clamp`, `rnd`, `frnd`, `free`, `file_exists`, `is_dir`, `UID` as builtins; `fetch.AsyncFetch` and `scrolling.Scroll` modules |
 | Imports | `import artmatrix` gives the `gitmatrix` module; `rom_font` is an alias of `font` (as on Art Matrix) |
 | Errors | an exception in `update()` skips the frame; 5 in a row stop the plugin |
@@ -90,7 +90,7 @@ Bluetooth speaker called **GitMatrix**, and `mic` (also available as `audio` and
 | Source | SENS-header mic (room sound) | the A2DP stream (only while music plays) |
 | `level()` … `spectrum()` | ✓ | ✓, same ranges, computed from the 512-bin FFT |
 | `waveform()` | 64 points, -1..1 | 64 zeros: `bt_audio` exposes no PCM to Python |
-| Extras | | `bass()`, `fft()` (raw bins), `streaming()`, `connected()`, `volume()`, `set_volume()`, `name` |
+| Extras | | `bass()`, `fft()` (raw bins), `sample_rate()`, `band_range(i)`, `streaming()`, `connected()`, `volume()`, `set_volume()`, `name` |
 | Silence | quiet room | nothing streaming: everything reads 0, `active()` is `False` |
 
 A visualiser should draw something when `audio.streaming()` is `False`, and can set

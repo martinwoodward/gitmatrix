@@ -143,7 +143,7 @@ Installs can instead wait until playback stops.
 | `config.html` + `process_config(form)` | served at `/config?plugin=<name>`; `<form data-autosave>` and the automatic "Reset to defaults" button as on Art Matrix |
 | `fetch.AsyncFetch` | vendored from Art Matrix (TLS with `CERT_NONE`, as Art Matrix) |
 | `scrolling.Scroll` | `update(progress)`, `render(offset)`, `reset()`, `set_text()` |
-| `mic.level()`, `tone()`, `flux()`, `intensity()`, `active()`, `bpm()`, `phase()`, `beat()`, `kick()`, `clap()`, `spectrum()` (16 bands) | driven by the Bluetooth speaker's FFT rather than a microphone |
+| `mic.level()`, `tone()`, `flux()`, `intensity()`, `active()`, `bpm()`, `phase()`, `beat()`, `kick()`, `clap()`, `spectrum()` (16 bands, [60 Hz – 16 kHz](#spectrum-bands)) | driven by the Bluetooth speaker's FFT rather than a microphone |
 | `clamp`, `rnd`, `frnd`, `free`, `file_exists`, `is_dir`, `UID` | builtins |
 | `create_task(coro)` | via `gitmatrix.create_task`; errors count against the plugin, and tasks are cancelled on quarantine |
 
@@ -184,7 +184,9 @@ cfg.hue, cfg["mode"], cfg.get("token")   # secrets live in /secrets/<plugin>.jso
 cfg.update({"hue": 120})        # validated, clamped, persisted
 
 gitmatrix.audio.bass()          # 0-1 low-end energy
-gitmatrix.audio.fft()           # the raw 512 FFT bins
+gitmatrix.audio.fft()           # the raw 512 FFT bins; bin b is centred on b * sample_rate() / 1024 Hz
+gitmatrix.audio.sample_rate()   # the stream's sample rate, 44100 or 48000
+gitmatrix.audio.band_range(i)   # (low Hz, high Hz) of spectrum() band i
 gitmatrix.audio.streaming()     # music is playing to the speaker
 gitmatrix.audio.connected()
 gitmatrix.audio.volume()        # 0-1 (the knob menu sets this)
@@ -198,6 +200,21 @@ gitmatrix.reboot()              # saves, then soft-resets (machine.soft_reset();
                                 # whose warm reset can hang the board until replugged)
 gitmatrix.WIDTH, gitmatrix.HEIGHT   # 53, 7
 ```
+
+### Spectrum bands
+
+`spectrum()` covers 60 Hz – 16 kHz in 16 log-spaced bands, weighted toward the midrange
+where vocals, guitars, pianos and snares live. Sub-bass below 60 Hz and the air above
+16 kHz are left out. Each band is the peak FFT bin in its range; the bin edges follow the
+stream's sample rate, and every band gets at least one bin.
+
+| Region | Bands | Range |
+| --- | --- | --- |
+| Bass (kick drums, bass guitar) | 0 | 60–250 Hz |
+| Midrange (vocals, guitars, pianos, snares) | 1–12 | 250 Hz – 4 kHz, third-octave bands starting at 250, 315, 397, 500, 630, 794, 1000, 1260, 1587, 2000, 2520, 3175 Hz |
+| Presence & brilliance (cymbals, hi-hats, vocal air) | 13–15 | 4–6.35 kHz, 6.35–10.1 kHz, 10.1–16 kHz |
+
+`bass()` and `kick()` read band 0; `clap()` reads bands 12–15 (~3–16 kHz).
 
 `gitmatrix.state()` and `gitmatrix.settings()` work out the calling plugin automatically
 inside hooks. Pass a name to use them anywhere else.
