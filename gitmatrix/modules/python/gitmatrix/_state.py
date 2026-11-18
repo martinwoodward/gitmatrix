@@ -6,10 +6,9 @@
 
 import json
 
-from gitmatrix import _compat, _runtime
+from gitmatrix import _compat, _flash, _runtime
 
 SAVE_INTERVAL_MS = 30000     # minimum gap between flash writes per plugin
-MAX_DEFER_MS = 300000        # write anyway after this long even while streaming
 
 _states = {}
 _settings = {}
@@ -34,8 +33,9 @@ def _write_json(path, value):
 class State:
     """A dict persisted to /data/<name>/state.json.
 
-    Assignments mark it dirty; the host flushes it at most every 30 s (and not
-    while audio is streaming, up to 5 minutes). Call save(now=True) to force it.
+    Assignments mark it dirty; the host flushes it at most every 30 s, and never
+    while Bluetooth audio is streaming (a flash write then can hang the board):
+    it waits until playback stops. save(now=True) skips the 30 s gap, not that.
     Mutating nested values in place needs an explicit save().
     """
 
@@ -44,7 +44,6 @@ class State:
         self.path = _runtime.data_dir(name) + "/state.json"
         self._data = _read_json(self.path, {})
         self._dirty = False
-        self._dirty_since = 0
         self._last_write = _compat.ticks_ms() - SAVE_INTERVAL_MS
 
     # dict protocol
@@ -107,9 +106,7 @@ class State:
         return self._dirty
 
     def save(self, now=False):
-        if not self._dirty:
-            self._dirty = True
-            self._dirty_since = _compat.ticks_ms()
+        self._dirty = True
         if now:
             self.flush(force=True)
 
@@ -117,11 +114,10 @@ class State:
         if not self._dirty:
             return False
         now = _compat.ticks_ms()
-        if not force:
-            if _compat.ticks_diff(now, self._last_write) < SAVE_INTERVAL_MS:
-                return False
-            if streaming and _compat.ticks_diff(now, self._dirty_since) < MAX_DEFER_MS:
-                return False
+        if streaming or not _flash.can_write():
+            return False
+        if not force and _compat.ticks_diff(now, self._last_write) < SAVE_INTERVAL_MS:
+            return False
         try:
             _write_json(self.path, self._data)
         except OSError as e:

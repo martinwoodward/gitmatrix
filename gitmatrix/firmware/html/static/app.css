@@ -107,3 +107,20 @@ pre.log { max-height: 20rem; overflow: auto; background: var(--bg); padding: 0.7
   padding: 0.5rem 1rem; max-width: 90%;
 }
 #toast.bad { border-color: var(--danger); }
+
+.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr)); gap: 1rem; }
+.cards .card { display: flex; flex-direction: column; gap: 0.4rem; margin: 0; }
+.cards .card .grow { flex: 1; }
+.thumb { width: 100%; aspect-ratio: 53 / 7; image-rendering: pixelated; background: #000; border-radius: 3px; }
+.thumb.missing { visibility: hidden; }
+.tags { display: flex; flex-wrap: wrap; gap: 0.25rem; }
+.tag, .badge { font-size: 0.75rem; padding: 0.05rem 0.45rem; border-radius: 1rem; background: var(--lift); color: var(--dim); }
+.badge { background: rgba(46, 160, 67, 0.2); color: var(--accent-ink); margin-left: 0.4rem; }
+.badge.update { background: rgba(210, 153, 34, 0.2); color: var(--warn); }
+progress { width: 100%; accent-color: var(--accent); }
+textarea { width: 100%; background: var(--bg); color: var(--ink); border: 1px solid var(--rule); border-radius: var(--radius); font: inherit; padding: 0.4rem 0.6rem; }
+input[type=url], input[type=search], input[type=color] {
+  width: 100%; min-height: var(--tap); padding: 0.4rem 0.6rem; border: 1px solid var(--rule);
+  border-radius: var(--radius); background: var(--bg); color: var(--ink); font: inherit;
+}
+input[type=color] { padding: 0.2rem; }

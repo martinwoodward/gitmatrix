@@ -19,7 +19,7 @@
 </section>
 <section>
   <h2>Plugins</h2>
-  <p class="muted">Enabled plugins rotate in this order. Use ↑/↓ to reorder.</p>
+  <p class="muted">Enabled plugins rotate in this order. Use ↑/↓ to reorder. Click a plugin for its settings, or find more in <a href="/discover.html">Discover</a>.</p>
   <ul class="list" id="plugins"></ul>
   <label for="delay">Show each plugin for (seconds, 0 = don't rotate)</label>
   <div class="row"><input class="grow" type="number" id="delay" min="0" max="86400"><button id="save-delay">Save</button></div>
@@ -41,7 +41,9 @@ function render(data) {
     const note = p.quarantined ? el("div", { class: "bad" }, "Quarantined: " + (p.reason || "too many errors"))
       : p.last_error ? el("div", { class: "muted mono" }, p.last_error) : null;
     ul.append(el("li", { class: p.current ? "picked" : "" }, toggle,
-      el("div", { class: "grow" }, el("div", {}, p.title, p.current ? " (showing)" : ""), note),
+      el("div", { class: "grow" }, el("div", {}, el("a", { href: "/plugin.html?name=" + encodeURIComponent(p.name) }, p.title),
+        p.current ? " (showing)" : "",
+        p.update_available ? el("a", { class: "badge update", href: "/discover.html?q=" + encodeURIComponent(p.name) }, "update") : null), note),
       p.quarantined ? el("button", { onclick: () => act(`/plugins/${p.name}/unquarantine`) }, "Un-quarantine")
         : el("button", { disabled: !p.enabled, onclick: () => act(`/plugins/${p.name}/show`) }, "Show now"),
       el("button", { "aria-label": "Move up", disabled: i === 0, onclick: () => move(i, -1) }, "↑"),

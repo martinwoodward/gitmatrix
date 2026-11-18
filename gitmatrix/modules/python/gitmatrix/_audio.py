@@ -7,7 +7,7 @@
 
 from array import array
 
-from gitmatrix import _compat, _runtime
+from gitmatrix import _compat, _flash, _runtime
 
 try:
     import bt_audio
@@ -275,6 +275,7 @@ def start(bt=None, name=NAME, keys_file=None):
     """Bring the speaker up. Called once at boot; plugins never own Bluetooth."""
     bt = bt if bt is not None else bt_audio
     keys_file = keys_file or _runtime.path(KEYS_FILE)
+    _flash.set_bt(bt)
     if bt is None:
         return False
     try:
@@ -294,6 +295,8 @@ def start(bt=None, name=NAME, keys_file=None):
 def save_link_keys(bt=None, keys_file=None):
     bt = bt if bt is not None else bt_audio
     keys_file = keys_file or _runtime.path(KEYS_FILE)
+    if not _flash.can_write():
+        return False    # a new pairing waits until playback stops
     try:
         if bt is not None and bt.link_keys_dirty():
             _compat.write_atomic(keys_file, bt.link_keys())
@@ -323,17 +326,20 @@ def set_pairable(on, bt=None):
 
 
 def forget_devices(bt=None, keys_file=None):
+    """Forget every paired phone. Disconnects a playing one (the sink is paused
+    for the flash write and comes back with no keys)."""
     bt = bt if bt is not None else bt_audio
     keys_file = keys_file or _runtime.path(KEYS_FILE)
-    try:
-        if _compat.exists(keys_file):
-            import os
-            os.remove(keys_file)
-    except OSError:
-        pass
-    try:
-        if bt is not None:
-            bt.load_link_keys(b"")
-    except Exception:  # noqa: BLE001, S110 - best effort; keys are gone from flash either way
-        return False
+    with _flash.pause():
+        _flash.drop_keys()
+        try:
+            if _compat.exists(keys_file):
+                _compat.remove_tree(keys_file)
+        except OSError:
+            pass
+        try:
+            if bt is not None and not _flash.sink_down():
+                bt.load_link_keys(b"")
+        except Exception:  # noqa: BLE001, S110 - best effort; keys are gone from flash either way
+            return False
     return True

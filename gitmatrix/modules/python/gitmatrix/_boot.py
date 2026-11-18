@@ -3,7 +3,7 @@
 import builtins
 
 import gitmatrix
-from gitmatrix import _audio, _compat, _log, _persist, _runtime, _state, _store
+from gitmatrix import _audio, _compat, _flash, _log, _persist, _runtime, _state, _store
 from gitmatrix._config import Config, load_firmware_config
 from gitmatrix._display import Compositor, DisplayProxy
 from gitmatrix._host import Host
@@ -89,6 +89,13 @@ def boot(input_=None, bt=None, network_=None):
     elif boots >= BOOT_LOOP_LIMIT:
         safe = f"{boots} failed boots"
 
+    # finish or undo a plugin install a power cut interrupted, before anything
+    # loads - and before Bluetooth is up, so its flash writes can't meet a stream
+    try:
+        _store.reconcile()
+    except Exception as e:  # noqa: BLE001 - a muddled store must not stop the display
+        _log.log(f"store: reconcile failed {_compat.error_text(e)}")
+
     # The speaker is always on, whatever is (or isn't) running
     if bt is not None:
         gitmatrix.audio._bt = bt  # noqa: SLF001
@@ -96,11 +103,6 @@ def boot(input_=None, bt=None, network_=None):
     _runtime.audio = gitmatrix.audio
 
     rt.watchdog = _Watchdog(config.get("watchdog", True))
-    # finish or undo a plugin install a power cut interrupted, before anything loads
-    try:
-        _store.reconcile()
-    except Exception as e:  # noqa: BLE001 - a muddled store must not stop the display
-        _log.log(f"store: reconcile failed {_compat.error_text(e)}")
     rt.store = _store.Store()
     rt.store.feed = rt.watchdog.feed
     rt.loader = loader = PluginLoader(config, rt.compositor, rt.watchdog.feed)
@@ -108,6 +110,7 @@ def boot(input_=None, bt=None, network_=None):
     crashed = loader.check_crash(was_watchdog)
 
     rt.host = host = Host(config, loader, rt.compositor, rt.input, gitmatrix.audio, safe)
+    _flash.on_resume = host.apply_pairable
     if not safe:
         loader.load_all()
     host.start()
@@ -123,18 +126,22 @@ def boot(input_=None, bt=None, network_=None):
         rt.wifi.prescan(rt.watchdog.feed)
     except Exception as e:  # noqa: BLE001 - no WiFi is bad, but no display and speaker is worse
         _log.log(f"wifi: start failed {_compat.error_text(e)}")
-    config.save()
+    if _flash.can_write():      # else housekeeping saves it once playback stops
+        config.save()
     rt.watchdog.feed()
     return rt
 
 
 def housekeeping(rt, now):
-    """Flushes and timers. Called every couple of seconds."""
-    streaming = gitmatrix.audio.streaming()
-    _audio.save_link_keys()
-    _state.flush_all(streaming=streaming)
-    if rt.config.dirty and not streaming:
-        rt.config.save()
+    """Flushes and timers. Called every couple of seconds. Background writes all
+    wait while Bluetooth audio streams: a flash write then can hang the board."""
+    if _flash.can_write():
+        _audio.save_link_keys()
+        _state.flush_all()
+        if rt.config.dirty:
+            rt.config.save()
+        if rt.store is not None:
+            rt.store.flush()
     if not rt.healthy and _compat.ticks_diff(now, rt.booted) > HEALTHY_MS:
         rt.healthy = True
         _persist.clear_boot()
@@ -149,9 +156,11 @@ def shutdown(rt):
     _persist.disable_watchdog()
     _persist.clear_all()
     try:
-        _state.flush_all(force=True)
-        if rt is not None and rt.config is not None:
-            rt.config.save()
+        # the sink stays stopped: mpremote writes to flash next (deploys)
+        with _flash.pause(resume=False):
+            _state.flush_all(force=True)
+            if rt is not None and rt.config is not None:
+                rt.config.save()
     except OSError:
         pass
     if rt is not None and rt.compositor is not None:
@@ -236,7 +245,8 @@ def run():
     except Exception as e:  # noqa: BLE001 - a host bug: reboot; repeated failures land in safe mode
         _compat.print_exception(e)
         try:
-            _state.flush_all(force=True)
-        except OSError:
+            with _flash.pause(resume=False):
+                _state.flush_all(force=True)
+        except Exception:  # noqa: BLE001, S110 - rebooting regardless
             pass
         _persist.reset(1000, keep_boot=True)

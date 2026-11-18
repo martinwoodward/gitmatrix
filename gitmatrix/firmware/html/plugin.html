@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Plugin · GitMatrix</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<main>
+<h1 id="title">Plugin</h1>
+<section id="about"><dl class="facts" id="facts"></dl></section>
+<section id="settings-box">
+  <h2>Settings</h2>
+  <p class="muted hidden" id="config-link">This plugin has its own settings page: <a id="config-a" href="#">open it</a>.</p>
+  <form id="form"></form>
+  <p class="muted hidden" id="none">This plugin has no settings.</p>
+</section>
+<section id="remove-box" class="hidden">
+  <h2>Remove</h2>
+  <label><input type="checkbox" id="keep" checked> Keep its saved data and secrets (for reinstalling later)</label>
+  <div class="actions"><button class="danger" id="remove">Remove plugin</button></div>
+</section>
+<p class="warn">Saving writes to flash. If Bluetooth audio is playing you'll be asked to stop it first; your phone or computer then needs to reconnect.</p>
+</main>
+<script src="/static/app.js"></script>
+<script>
+const name = new URLSearchParams(location.search).get("name") || "";
+const INPUT = { text: "text", string: "text", url: "url", number: "number", float: "number", int: "number", color: "color" };
+let clearing = new Set();
+
+function field(f, values) {
+  const id = "f-" + f.key;
+  const label = el("label", { for: id }, f.label);
+  const help = f.help ? el("div", { class: "muted" }, f.help) : null;
+  if (f.type === "bool") {
+    return el("div", {}, el("label", {}, el("input", { type: "checkbox", id, name: f.key, checked: !!values[f.key] }), " ", f.label), help);
+  }
+  if (f.type === "select" || f.type === "choice") {
+    const sel = el("select", { id, name: f.key }, ...f.options.map((o) => el("option", { value: JSON.stringify(o.value) }, o.label)));
+    sel.value = JSON.stringify(values[f.key] ?? f.default);
+    return el("div", {}, label, sel, help);
+  }
+  if (f.type === "secret") {
+    const input = el("input", { type: "password", id, name: f.key, autocomplete: "off",
+      placeholder: f.set ? "•••• set (leave blank to keep)" : "not set" });
+    const clear = f.set ? el("button", { type: "button", class: "danger", onclick: () => {
+      clearing.add(f.key); input.value = ""; input.placeholder = "will be cleared when you save"; clear.disabled = true;
+    } }, "Clear") : null;
+    const status = el("span", { class: f.set ? "good" : "muted" }, f.set ? " •••• set" : " not set");
+    return el("div", {}, el("label", { for: id }, f.label, status), el("div", { class: "row" }, el("div", { class: "grow" }, input), clear), help);
+  }
+  const attrs = { type: INPUT[f.type] || "text", id, name: f.key, value: values[f.key] ?? "" };
+  for (const k of ["min", "max", "step", "placeholder"]) if (f[k] != null) attrs[k] = f[k];
+  if (f.type === "float" || f.type === "number") attrs.step = attrs.step || "any";
+  return el("div", {}, label, el("input", attrs), help);
+}
+
+function collect(schema) {
+  const out = {};
+  for (const f of schema) {
+    const input = document.getElementById("f-" + f.key);
+    if (f.type === "bool") out[f.key] = input.checked;
+    else if (f.type === "select" || f.type === "choice") out[f.key] = JSON.parse(input.value);
+    else if (f.type === "secret") {
+      if (input.value) out[f.key] = input.value;
+      else if (clearing.has(f.key)) out[f.key] = "";
+    } else if (["number", "float", "int"].includes(f.type)) {
+      if (input.value !== "") out[f.key] = Number(input.value);
+    } else out[f.key] = input.value;
+  }
+  return out;
+}
+
+function renderSettings(s) {
+  clearing = new Set();
+  const form = $("#form");
+  form.replaceChildren(...s.schema.map((f) => field(f, s.values)));
+  if (s.schema.length) {
+    form.append(el("div", { class: "actions" }, el("button", { class: "primary", type: "submit" }, "Save")));
+    form.onsubmit = async (ev) => {
+      ev.preventDefault();
+      const r = await attempt(() => withAudio(`/plugins/${name}/settings`, collect(s.schema), false), "Saved");
+      if (r) renderSettings(r);
+    };
+  }
+  $("#config-link").classList.toggle("hidden", !s.config_url);
+  if (s.config_url) $("#config-a").href = s.config_url;
+  $("#none").classList.toggle("hidden", !!(s.schema.length || s.config_url));
+}
+
+async function load() {
+  if (!name) { $("#title").textContent = "No plugin chosen"; return; }
+  const info = await attempt(() => api("/plugins/" + encodeURIComponent(name)));
+  if (!info) return;
+  document.title = info.title + " · GitMatrix";
+  $("#title").replaceChildren(info.title,
+    info.update_available ? el("span", { class: "badge update" }, "update available") : null);
+  const facts = [["Name", name], ["Version", info.version || "?"],
+    ["Source", info.installed ? "installed from the plugin store" : "built in"],
+    ["Status", info.quarantined ? "quarantined: " + (info.reason || "") : info.enabled ? "enabled" : "disabled"]];
+  $("#facts").replaceChildren(...facts.flatMap(([k, v]) => [el("dt", {}, k), el("dd", {}, v)]));
+  if (info.update_available) {
+    $("#facts").append(el("dt", {}, "Update"), el("dd", {}, el("a", { href: "/discover.html?q=" + encodeURIComponent(name) }, "Update from Discover")));
+  }
+  $("#remove-box").classList.toggle("hidden", !info.installed);
+  const s = await attempt(() => api(`/plugins/${name}/settings`));
+  if (s) renderSettings(s);
+}
+
+$("#remove").onclick = async () => {
+  if (!confirm("Remove this plugin?")) return;
+  const r = await attempt(() => withAudio(`/plugins/${name}/remove`, { keep_data: $("#keep").checked }, false), "Removed");
+  if (r) location.href = "/";
+};
+load();
+</script>
+</body>
+</html>

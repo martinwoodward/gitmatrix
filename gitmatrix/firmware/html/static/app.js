@@ -38,8 +38,29 @@ async function api(path, body, method) {
   const res = await fetch("/api/v1" + path, opts);
   let data = {};
   try { data = await res.json(); } catch (e) { /* empty body */ }
-  if (!res.ok) throw new Error(data.error || res.status + " " + res.statusText);
+  if (!res.ok) {
+    const err = new Error(data.error || res.status + " " + res.statusText);
+    err.status = res.status;
+    err.data = data;
+    throw err;
+  }
   return data;
+}
+
+// Flash writes can't happen while Bluetooth audio plays (the board can hang), so
+// the device answers 409 {audio_streaming} to installs and settings saves. Ask,
+// then retry with pause_audio (the speaker disconnects) or, if allowed, queue.
+async function withAudio(path, body, canQueue) {
+  try {
+    return await api(path, body);
+  } catch (e) {
+    if (!e.data || !e.data.audio_streaming) throw e;
+    const msg = "Bluetooth audio is playing. " + e.data.error + ".\n\n" +
+      (canQueue ? "OK: stop the audio and do it now.\nCancel: wait until playback stops." : "OK: stop the audio and do it now.");
+    if (confirm(msg)) return api(path, { ...body, pause_audio: true });
+    if (canQueue) return api(path, { ...body, queue: true });
+    throw new Error("Not saved: Bluetooth audio is playing");
+  }
 }
 
 let toastTimer;

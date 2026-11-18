@@ -6,7 +6,9 @@
     python3 gitmatrix/tools/deploy.py --port /dev/cu.usbmodem1101 --reset
 
 User data (/config.py, /gitmatrix_config.py, /data, /secrets, /bt_link_keys.bin,
-/contrib_data.json) is never touched. Needs `mpremote` (pip install mpremote).
+/contrib_data.json) and store-installed plugins are never touched. Stop Bluetooth
+playback first: a flash write while the speaker streams can hang the board.
+Needs `mpremote` (pip install mpremote).
 """
 
 import argparse

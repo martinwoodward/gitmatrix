@@ -218,7 +218,7 @@ def test_token_auth(web):
 
 def test_static_pages(web):
     for path in ("/", "/index.html", "/wifi", "/settings.html", "/bluetooth.html", "/system.html",
-                 "/discover.html", "/notifications.html", "/sounds.html", "/static/app.js"):
+                 "/discover.html", "/plugin.html", "/notifications.html", "/sounds.html", "/static/app.js"):
         resp = call("GET", path)
         assert resp.status == 200, path
     assert call("GET", "/static/app.css").headers["Content-Type"] == "text/css"
@@ -269,3 +269,21 @@ def test_wifi_failure_does_not_stop_boot(rig):
     rig.net.WLAN = broken
     rt = rig.boot()
     assert rt.host is not None and isinstance(rt.host, _host.Host)
+
+
+def test_wifi_save_while_streaming_pauses_audio_and_warns(web, bt):
+    bt.streaming_now = True
+    r = ok("POST", "/api/v1/wifi", {"ssid": "office", "password": "letmein99"})
+    assert "reconnect your device" in r["warning"]
+    assert "wifi_ssid = 'office'" in (web.root / "config.py").read_text()
+    assert bt.deinits == 1 and bt.name == "GitMatrix"
+
+
+def test_device_settings_wait_for_playback_to_stop(web, bt):
+    bt.streaming_now = True
+    ok("POST", "/api/v1/settings", {"delay": 17})
+    assert "delay = 17" not in (web.root / "config.py").read_text()
+    assert bt.deinits == 0
+    bt.streaming_now = False
+    _boot.housekeeping(web.rt, web.clock.advance(1000))
+    assert "delay = 17" in (web.root / "config.py").read_text()

@@ -3,7 +3,6 @@ import json
 import pytest
 
 import gitmatrix
-from gitmatrix import _state
 from gitmatrix._state import Settings, State
 
 SCHEMA = [
@@ -37,13 +36,18 @@ def test_state_writes_are_rate_limited(root, clock):
     assert s.flush()
 
 
-def test_state_defers_while_streaming_but_not_forever(root, clock):
+def test_state_waits_for_playback_to_stop_however_long(root, clock, bt):
     s = State("demo")
     clock.advance(31000)
     s["a"] = 1
-    assert not s.flush(streaming=True)
-    clock.advance(_state.MAX_DEFER_MS + 1)
-    assert s.flush(streaming=True)
+    bt.streaming_now = True
+    clock.advance(3600 * 1000)
+    assert not s.flush()
+    assert not s.flush(force=True)
+    s.save(now=True)
+    assert s.dirty and not (root / "data" / "demo" / "state.json").exists()
+    bt.streaming_now = False
+    assert s.flush()
 
 
 def test_state_save_now(root):

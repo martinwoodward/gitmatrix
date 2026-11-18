@@ -10,7 +10,10 @@
 #   1. read <plugin>/package.json, validate it and check there's room on flash
 #   2. download every file: into RAM when small, else straight to the staging
 #      folder /.install/<name>@<hash>/; check the package hash
-#   3. write the staged copy in one burst, package.json last (= complete)
+#   3. write the staged copy in one burst, package.json last (= complete).
+#      Never while Bluetooth audio streams (a flash write then can hang the
+#      board): the request either says pause_audio (the sink stops for the
+#      burst; the phone must reconnect) or queue (wait until playback stops)
 #   4. commit without yielding: journal, rename the live /lib/plugins/<name> to
 #      /.install/<name>.old, rename the staged copy into place, carry over files
 #      the plugin made itself, atomically rewrite /lib/plugins/active.json
@@ -25,7 +28,7 @@
 import json
 import os
 
-from gitmatrix import _compat, _log, _runtime
+from gitmatrix import _compat, _flash, _log, _runtime
 
 INDEX_HOST = "raw.githubusercontent.com"
 DEFAULT_REPO = "martinwoodward/gitmatrix-plugins"
@@ -46,7 +49,8 @@ MAX_FILE_BYTES = 256 * 1024
 RAM_STAGE_BYTES = 48 * 1024       # bigger plugins download straight to flash
 SPACE_MARGIN = 32 * 1024          # left free after an install
 HASH_LENGTH = 12
-AUDIO_WARNING = "audio may glitch while the plugin is written to flash"
+QUEUE_POLL_MS = 1000              # how often a queued install checks playback
+AUDIO_WARNING = _flash.AUDIO_WARNING
 
 
 class StoreError(Exception):
@@ -347,10 +351,10 @@ def reconcile():
     """At boot, before plugins load: finish or undo a cut-off commit, drop
     active.json entries with no complete folder, empty /.install."""
     work = _runtime.path(INSTALL_DIR)
-    journal = _read_json(_runtime.path(JOURNAL), None)
+    journal = _read_json(_runtime.path(JOURNAL), {})
     data = active()
     changed = False
-    if isinstance(journal, dict) and _compat.valid_name(journal.get("name", "")):
+    if _compat.valid_name(journal.get("name", "")):
         name = journal["name"]
         live = live_dir(name)
         old = work + "/" + name + ".old"
@@ -398,6 +402,7 @@ class Store:
         self.error = None
         self.refreshing = False
         self.progress = None       # install/update progress for the UI
+        self.pending_cache = None  # index to write once Bluetooth audio stops
         self.feed = lambda: None   # the watchdog, during long flash writes
         _runtime.store = self
         self.load_cache()
@@ -440,7 +445,8 @@ class Store:
             index = parse_index(data)
             key = f"{name}@{branch}"
             if index != self.index or key != self.index_repo:
-                _write_json(_runtime.path(CACHE), {"repo": key, "index": data})
+                self.pending_cache = {"repo": key, "index": data}
+                self.flush()
             self.index = index
             self.index_repo = key
             self.error = None
@@ -453,6 +459,19 @@ class Store:
         finally:
             self.checked_at = _compat.ticks_ms()
             self.refreshing = False
+
+    def flush(self):
+        """Write a fetched index to the cache, unless audio is streaming
+        (housekeeping calls this again once it stops)."""
+        if self.pending_cache is None or not _flash.can_write():
+            return False
+        try:
+            _write_json(_runtime.path(CACHE), self.pending_cache)
+        except OSError as e:
+            _log.log(f"store: could not cache the index ({_compat.error_text(e)})")
+            return False
+        self.pending_cache = None
+        return True
 
     def entry(self, name):
         return (self.index or {}).get(name)
@@ -496,8 +515,11 @@ class Store:
     def busy(self):
         return self.progress is not None and not self.progress["finished"]
 
-    def begin(self, name, warn_audio=False):
-        """Validate an install request and set up its progress; raises StoreError."""
+    def begin(self, name, pause_audio=False, queue=False):
+        """Validate an install request and set up its progress; raises StoreError.
+        While Bluetooth audio streams it needs pause_audio or queue (409 without)."""
+        if _flash.streaming() and not (pause_audio or queue):
+            raise StoreError(409, AUDIO_WARNING)
         if self.busy():
             raise StoreError(409, "another install is running")
         entry = self.entry(name)
@@ -515,15 +537,31 @@ class Store:
             "total": entry["files"] or 0,
             "finished": False,
             "error": None,
-            "warning": AUDIO_WARNING if warn_audio else None,
+            "state": "downloading",
+            "pause_audio": bool(pause_audio),
+            "queue": bool(queue),
+            "paused_audio": False,
         }
         return self.progress
+
+    async def _writable(self, progress):
+        """Wait (queue) until flash may be written; the caller then writes inside
+        pause(), which stops the sink if pause_audio was given."""
+        while _flash.streaming():
+            if progress["pause_audio"]:
+                return
+            if not progress["queue"]:
+                raise StoreError(409, "Bluetooth audio started; " + AUDIO_WARNING)
+            progress["state"] = "queued"
+            await _sleep_ms(QUEUE_POLL_MS)
+        progress["state"] = "installing"
 
     async def install(self, name):
         """Run an install begun with begin(); never raises."""
         progress = self.progress
         work = _runtime.path(INSTALL_DIR)
         stage = None
+        held = None
         try:
             entry = self.entry(name)
             raw = await http_get(f"{base_path()}/{name}/{MANIFEST}", MAX_INDEX_BYTES)
@@ -537,17 +575,25 @@ class Store:
                 raise StoreError(507, f"not enough flash: needs {need // 1024} KB, {free // 1024} KB free")
 
             hash_ = str(manifest.get("hash") or (entry or {}).get("hash") or "new")[:HASH_LENGTH]
-            stage = f"{work}/{name}@{hash_}"
-            _compat.remove_tree(stage)
-            _compat.makedirs(stage)
-
             in_ram = size is not None and size <= RAM_STAGE_BYTES
+            if not in_ram:
+                # too big for RAM: it downloads straight to flash, so the sink
+                # (if paused) stays down for the whole download
+                await self._writable(progress)
+                held = _flash.pause()
+                held.__enter__()
+                progress["paused_audio"] = held.stopped
+                progress["state"] = "downloading"
+            stage = f"{work}/{name}@{hash_}"
             got = []                          # (rel, bytes or staged filename)
             for rel, src in files:
                 url = f"{base_path()}/{name}/{src}"
                 if in_ram:
                     got.append((rel, await http_get(url)))
                 else:
+                    if not got:
+                        _compat.remove_tree(stage)
+                        _compat.makedirs(stage)
                     target = stage + "/" + rel
                     _ensure_parent(target)
                     await http_get(url, file=target)
@@ -559,32 +605,47 @@ class Store:
             if want and have is not None and have != want:
                 raise StoreError(502, "download corrupted (hash mismatch)")
 
-            # one burst of flash writes, package.json last marks the copy complete
-            for rel, data in got:
-                if not isinstance(data, str):
-                    target = stage + "/" + rel
-                    _ensure_parent(target)
-                    with open(target, "wb") as f:
-                        f.write(data)
-                    self.feed()
-            got = None
-            _compat.write_atomic(stage + "/" + MANIFEST, json.dumps(manifest))
-
+            if held is None:
+                await self._writable(progress)
             version = manifest.get("version") if isinstance(manifest.get("version"), str) else ""
-            message = self._commit(name, stage, version, hash_)
-            stage = None
+            # one burst of flash writes with no awaits, package.json last marks
+            # the copy complete; then the commit
+            with _flash.pause() as burst:
+                if burst.stopped:
+                    progress["paused_audio"] = True
+                if in_ram:
+                    _compat.remove_tree(stage)
+                    _compat.makedirs(stage)
+                for rel, data in got:
+                    if not isinstance(data, str):
+                        target = stage + "/" + rel
+                        _ensure_parent(target)
+                        _flash.check()
+                        with open(target, "wb") as f:
+                            f.write(data)
+                        self.feed()
+                got = None
+                _compat.write_atomic(stage + "/" + MANIFEST, json.dumps(manifest))
+                message = self._commit(name, stage, version, hash_)
+                stage = None
             if message:
                 progress["error"] = message
         except StoreError as e:
             progress["error"] = str(e)
+        except _flash.FlashBusy:
+            progress["error"] = "Bluetooth audio started during the install; try again with the audio paused"
         except Exception as e:  # noqa: BLE001 - network, flash or a bad package: report it
             progress["error"] = f"install failed: {_compat.error_text(e)}"
         finally:
             if stage is not None:
                 try:
-                    _compat.remove_tree(stage)
+                    with _flash.pause():
+                        _compat.remove_tree(stage)
                 except OSError:
                     pass
+            if held is not None:
+                held.__exit__(None, None, None)
+            progress["state"] = "failed" if progress["error"] else "done"
             if progress["error"]:
                 _log.log(f"store: {name}: {progress['error']}")
             progress["finished"] = True
@@ -592,7 +653,8 @@ class Store:
 
     def _commit(self, name, stage, version, hash_):
         """Swap the staged copy in (no awaits), then load it. Returns an error
-        message, or None."""
+        message, or None. Runs inside _flash.pause()."""
+        _flash.check()
         work = _runtime.path(INSTALL_DIR)
         live = live_dir(name)
         old = work + "/" + name + ".old"
@@ -642,7 +704,9 @@ class Store:
 
     # -- remove --
 
-    def remove(self, name, keep_data=True):
+    def remove(self, name, keep_data=True, pause_audio=False):
+        if _flash.streaming() and not pause_audio:
+            raise StoreError(409, AUDIO_WARNING)
         if self.busy():
             raise StoreError(409, "an install is running")
         data = active()
@@ -653,17 +717,18 @@ class Store:
         _stop(name)
         live = live_dir(name)
         work = _runtime.path(INSTALL_DIR)
-        _compat.makedirs(work)
         gone = work + "/" + name + ".removed"
-        _compat.remove_tree(gone)
-        if _compat.exists(live):
-            os.rename(live, gone)
-        data.pop(name)
-        _write_active(data)
-        _compat.remove_tree(gone)
         from gitmatrix import _state
 
-        _state.forget(name, delete=not keep_data)
+        with _flash.pause():
+            _compat.makedirs(work)
+            _compat.remove_tree(gone)
+            if _compat.exists(live):
+                os.rename(live, gone)
+            data.pop(name)
+            _write_active(data)
+            _compat.remove_tree(gone)
+            _state.forget(name, delete=not keep_data)
         loader = _runtime.loader
         if loader is not None:
             loader.sync_config()

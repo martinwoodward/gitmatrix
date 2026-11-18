@@ -10,7 +10,7 @@
 
 import json
 
-from gitmatrix import _audio, _compat, _log, _runtime, _wifi
+from gitmatrix import _audio, _compat, _flash, _log, _runtime, _wifi
 
 API = "/api/v1"
 COOKIE = "gm_token"
@@ -137,6 +137,15 @@ def _percent(value):
     if not 0 <= v <= 100:
         raise ValueError("value must be 0-100")
     return v
+
+
+def audio_gate(body):
+    """User-initiated flash writes while Bluetooth audio streams need the
+    caller's OK (pause_audio): the sink stops for the write and the phone has
+    to reconnect. None to go ahead, else the 409 reply."""
+    if _flash.streaming() and not _bool(body.get("pause_audio", False)):
+        return {"error": _flash.AUDIO_WARNING, "audio_streaming": True}, 409
+    return None
 
 
 def schedule_reboot(delay_ms=REBOOT_DELAY_MS):
@@ -422,25 +431,40 @@ def store_install(request):
     store, store_mod = _store()
     if request.method == "GET":
         return {"install": store.progress}
-    name = str(_body(request)["name"])
+    body = _body(request)
+    name = str(body["name"])
     if not _compat.valid_name(name):
         raise ValueError("bad plugin name")
+    streaming = _flash.streaming()
     try:
-        progress = store.begin(name, _runtime.audio is not None and _runtime.audio.streaming())
+        progress = store.begin(name, pause_audio=_bool(body.get("pause_audio", False)),
+                               queue=_bool(body.get("queue", False)))
     except store_mod.StoreError as e:
-        return {"error": str(e)}, e.status
+        return _store_error(e, streaming)
     spawn(store.install(name))
-    return {"install": progress, "warning": store_mod.AUDIO_WARNING}, 202
+    out = {"install": progress}
+    if streaming:
+        out["warning"] = _flash.AUDIO_WARNING
+    return out, 202
+
+
+def _store_error(e, streaming):
+    out = {"error": str(e)}
+    if e.status == 409 and streaming and str(e) == _flash.AUDIO_WARNING:
+        out["audio_streaming"] = True
+    return out, e.status
 
 
 @api("/plugins/<name>/remove", ("POST",))
 def plugin_remove(request, name):
     store, store_mod = _store()
-    keep = _body(request).get("keep_data", True)
+    body = _body(request)
+    streaming = _flash.streaming()
     try:
-        return store.remove(name, keep_data=_bool(keep))
+        return store.remove(name, keep_data=_bool(body.get("keep_data", True)),
+                            pause_audio=_bool(body.get("pause_audio", False)))
     except store_mod.StoreError as e:
-        return {"error": str(e)}, e.status
+        return _store_error(e, streaming)
 
 
 # ---- plugin settings --------------------------------------------------------
@@ -495,7 +519,13 @@ def plugin_settings(request, name):
     from gitmatrix import _state
 
     if request.method == "POST":
-        _state.settings(name).update(_body(request), strict=True)
+        body = _body(request)
+        blocked = audio_gate(body)
+        if blocked:
+            return blocked
+        body.pop("pause_audio", None)
+        with _flash.pause():
+            _state.settings(name).update(body, strict=True)
         _reload_plugin(name)
     return _plugin_settings_reply(name)
 
@@ -586,17 +616,14 @@ def config_page(request):
     if request.method == "POST":
         if not authorized(request):
             return _response("Unauthorized", 401, "text/plain")
-        form = request.form if isinstance(request.form, dict) else {}
+        form = dict(request.form) if isinstance(request.form, dict) else {}
+        if _flash.streaming() and not _bool(form.pop("pause_audio", False)):
+            return _audio_confirm_page(name, form)
+        form.pop("pause_audio", None)
         module, temporary = _module_for(name)
         try:
-            if "reset" in form:
-                _compat.remove_tree(_runtime.data_dir(name) + "/config.json")
-            elif module is not None and hasattr(module, "process_config"):
-                module.process_config(form)
-            else:
-                from gitmatrix import _state
-
-                _state._write_json(_runtime.data_dir(name) + "/config.json", form)  # noqa: SLF001
+            with _flash.pause():
+                _config_save(name, form, module)
         except Exception as e:  # noqa: BLE001 - the plugin's own code
             _log.log(f"config: {name} process_config failed {_compat.error_text(e)}")
             return _response(f"Couldn't save: {_escape(_compat.error_text(e))}", 400, "text/plain")
@@ -616,12 +643,39 @@ def config_page(request):
     finally:
         if temporary:
             _drop_module(name)
+    return _config_html(name, body)
+
+
+def _config_save(name, form, module):
+    if "reset" in form:
+        _compat.remove_tree(_runtime.data_dir(name) + "/config.json")
+    elif module is not None and hasattr(module, "process_config"):
+        module.process_config(form)
+    else:
+        from gitmatrix import _state
+
+        _state._write_json(_runtime.data_dir(name) + "/config.json", form)  # noqa: SLF001
+
+
+def _audio_confirm_page(name, form):
+    """A config.html form posted while audio streams: say so, and offer to save
+    anyway (the same fields again, plus pause_audio)."""
+    fields = "".join(f'<input type="hidden" name="{_escape(k)}" value="{_escape(v)}">' for k, v in form.items())
+    body = (f'<h2>Bluetooth audio is playing</h2><p class="warn">{_flash.AUDIO_WARNING}.</p>'
+            f'<form method="post" action="/config?plugin={name}">{fields}'
+            '<input type="hidden" name="pause_audio" value="1">'
+            '<button type="submit">Save anyway</button> '
+            f'<a class="button secondary" href="/config?plugin={name}">Cancel</a></form>')
+    return _config_html(name, body, 409)
+
+
+def _config_html(name, body, status=200):
     title = _escape(_plugin_info(name)["title"])
     headers = {"Cache-Control": "no-store"}
     token = _token()
     if token is not None:
         headers["Set-Cookie"] = _set_cookie(token)
-    return _response(_CONFIG_PAGE.format(title=title, name=name, body=body), 200, "text/html", headers)
+    return _response(_CONFIG_PAGE.format(title=title, name=name, body=body), status, "text/html", headers)
 
 
 _ROUTES.append(("/config", config_page, ["GET", "POST"]))
@@ -674,7 +728,8 @@ def settings(request):
             if len(token) > MAX_TOKEN or any(c in token for c in " ;,\"'\\"):
                 raise ValueError("token: up to 64 characters, no spaces, quotes, ';' or ','")
             cfg.set("api_token", token or None)
-        cfg.save()
+        if _flash.can_write():
+            cfg.save()      # else housekeeping saves it once playback stops
     out = {
         "brightness": cfg.get("brightness", 60),
         "volume": _volume_percent(),
@@ -732,10 +787,15 @@ def wifi_save(request):
         cfg.set("wifi_hostname", name)
     cfg.set("wifi_ssid", ssid)
     cfg.set("wifi_password", password)
-    cfg.save(force=True)
+    out = {"ok": True, "rebooting": True, "ssid": ssid}
+    if _flash.streaming():
+        out["warning"] = _flash.AUDIO_WARNING
+    with _flash.pause():
+        cfg.save(force=True)
     schedule_reboot()
     host = cfg.get("wifi_hostname") or _wifi.DEFAULT_HOSTNAME
-    return {"ok": True, "rebooting": True, "ssid": ssid, "url": f"http://{host}.local"}
+    out["url"] = f"http://{host}.local"
+    return out
 
 
 @api("/wifi/forget", ("POST",))
@@ -743,9 +803,13 @@ def wifi_forget(_request):
     cfg = _config()
     cfg.set("wifi_ssid", None)
     cfg.set("wifi_password", None)
-    cfg.save(force=True)
+    out = {"ok": True, "rebooting": True}
+    if _flash.streaming():
+        out["warning"] = _flash.AUDIO_WARNING
+    with _flash.pause():
+        cfg.save(force=True)
     schedule_reboot()
-    return {"ok": True, "rebooting": True}
+    return out
 
 
 async def _do_scan():
@@ -828,7 +892,7 @@ def _memory():
         return None
 
 
-def _flash():
+def _flash_space():
     import os
 
     try:
@@ -851,7 +915,8 @@ def system(_request):
         "micropython": ".".join(str(v) for v in impl[:3]),
         "uptime_ms": _compat.ticks_diff(_compat.ticks_ms(), _rt.booted) if _rt is not None else None,
         "memory": _memory(),
-        "flash": _flash(),
+        "flash": _flash_space(),
+        "audio_pauses": _flash.pauses,
         "safe_mode": _host().safe_mode if _host() is not None else None,
         "quarantined": _config().get("quarantined", {}),
         "errors": [{"plugin": n, "hook": h, "error": t} for n, h, t in (loader.errors if loader else [])],

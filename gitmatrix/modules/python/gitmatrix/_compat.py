@@ -53,6 +53,15 @@ def is_dir(path):
         return False
 
 
+def _no_guard():
+    pass
+
+
+# Called before every flash write below; gitmatrix._flash installs its check,
+# which raises FlashBusy (an OSError) while Bluetooth audio is streaming.
+guard = _no_guard
+
+
 def makedirs(path):
     """mkdir -p, MicroPython has no os.makedirs."""
     built = ""
@@ -61,12 +70,14 @@ def makedirs(path):
             continue
         built = built + "/" + part if built or path.startswith("/") else part
         if not exists(built):
+            guard()
             os.mkdir(built)
 
 
 def write_atomic(path, data):
     """Write to a temp file then rename over the target, so a power cut leaves the
     old file or the new one, never half of either."""
+    guard()
     tmp = path + ".tmp"
     mode = "wb" if isinstance(data, (bytes, bytearray)) else "w"
     with open(tmp, mode) as f:
@@ -75,6 +86,8 @@ def write_atomic(path, data):
 
 
 def remove_tree(path):
+    if exists(path):
+        guard()
     if is_dir(path):
         for entry in os.listdir(path):
             remove_tree(path + "/" + entry)

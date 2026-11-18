@@ -23,7 +23,9 @@ gitmatrix/
       _display   compositor + display/screen proxies
       _input     encoder + button events
       _audio     bt_audio speaker + mic-compatible analysis
-      _state     per-plugin state and typed settings
+      _state     per-plugin state and typed settings (schema, secrets in /secrets)
+      _store     plugin store: index cache, transactional install/update/remove, boot reconcile
+      _flash     the single flash writer: no writes while Bluetooth audio streams
       _config    /config.py load / migrate / save-in-place
       _persist   crash marker + boot counter (machine.mem_backup()[0..1]), watchdog reboot
       _wifi      STA / setup AP / fallback AP state machine, mDNS name, scans, captive DNS
@@ -31,7 +33,7 @@ gitmatrix/
       _log       in-RAM log ring (shown on the System page; never written to flash)
       glow       shared drawing helpers for built-in plugins
   modules/python/phew/             -> /lib/phew/  vendored phew (patched for 1.29 asyncio + an existing loop)
-  modules/python/wifi.py, timezones.py, plugin_config.py, scrolling.py
+  modules/python/wifi.py, timezones.py, plugin_config.py, scrolling.py, fetch.py
                                    -> /lib/  Art Matrix compatibility
   tools/deploy.py                  mpremote sync of the bundle
   tests/                           CPython harness (stubs for the device modules)
@@ -47,7 +49,9 @@ python3 gitmatrix/tools/deploy.py --reset
 ```
 
 User data (`/config.py`, `/gitmatrix_config.py`, `/data`, `/secrets`, `/bt_link_keys.bin`)
-is left alone.
+and store-installed plugins (`/lib/plugins/active.json`) are left alone. Stop any
+Bluetooth playback before deploying: a flash write while the speaker streams can hang the
+board.
 
 ## WiFi and the web UI
 
@@ -81,8 +85,28 @@ API (JSON, `/api/v1/`; phases 5/6 extend it):
 | `POST wifi/scan` (202, 429 within 15 s of the last), `GET wifi/networks` | rescan, results |
 | `GET bluetooth`, `POST bluetooth/forget`, `bluetooth/pairable` | |
 | `GET system`, `GET system/logs`, `POST system/reboot` | |
+| `GET store`, `POST store/refresh` | plugin catalogue (index + installed/update state); refetch the index |
+| `GET/POST store/install` | `{name, pause_audio?, queue?}` → 202 + progress; GET polls it |
+| `POST plugins/<name>/remove` | `{keep_data, pause_audio?}` |
+| `GET/POST plugins/<name>/settings` | schema + values; secrets are write-only (`"set": true`) |
+| `GET/POST /config?plugin=<name>` | the plugin's own Art Matrix-style `config.html` |
 
-Discover, Notifications and Sounds pages are placeholders until phases 3 and 4.
+Notifications and Sounds pages are placeholders until phase 4.
+
+## Plugin store
+
+**Discover** lists the plugins in `martinwoodward/gitmatrix-plugins` (set `PLUGIN_REPO` /
+`PLUGIN_BRANCH` in `/gitmatrix_config.py` to use another repo). The device fetches and
+caches its `index.json` every 15 minutes; search and filtering happen in the browser.
+Installing downloads and verifies the package, then swaps it into `/lib/plugins/<name>/`
+in one burst. A power cut mid-install is repaired at boot, and a failed update puts the
+old version back. Each plugin's page (click it on Home) has its settings, its
+`config.html` link and **Remove** (keep or delete its data).
+
+**Bluetooth audio**: flash writes can't happen while the speaker streams. Background
+saves (state, settings, config, the index cache) wait until playback stops. Installs,
+removals and settings saves ask first: the speaker disconnects for the write, and your
+phone or computer has to reconnect. Installs can wait for playback to stop instead.
 
 ## Develop
 

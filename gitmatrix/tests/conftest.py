@@ -15,7 +15,7 @@ import stubs  # noqa: E402
 FAKE_BT = stubs.install()
 
 import gitmatrix  # noqa: E402
-from gitmatrix import _persist, _runtime, _state  # noqa: E402
+from gitmatrix import _flash, _persist, _runtime, _state  # noqa: E402
 
 gitmatrix.install_globals()
 
@@ -46,6 +46,8 @@ def root(tmp_path):
     builtins.screen = stubs.image()
     builtins.display = stubs.Display()
     FAKE_BT.__init__()
+    _flash.set_bt(FAKE_BT)
+    _flash._down, _flash._depth, _flash.on_resume = None, 0, None  # noqa: SLF001
     try:
         yield tmp_path
     finally:

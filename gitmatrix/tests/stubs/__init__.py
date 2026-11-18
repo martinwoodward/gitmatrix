@@ -176,9 +176,18 @@ class FakeBT:
         self.loaded_keys = None
         self.keys_dirty = False
         self.pairable = None
+        self.inits = 0
+        self.deinits = 0
 
     def init(self, name="GitMatrix"):
         self.name = name
+        self.inits += 1
+
+    def deinit(self):
+        self.name = None
+        self.streaming_now = False
+        self.is_connected = False
+        self.deinits += 1
 
     def load_link_keys(self, data):
         self.loaded_keys = bytes(data)

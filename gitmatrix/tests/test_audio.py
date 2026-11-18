@@ -82,8 +82,9 @@ def test_link_keys_saved_when_dirty(root, bt):
     assert (root / "bt_link_keys.bin").read_bytes() == b"new"
 
 
-def test_housekeeping_saves_new_pairing_but_defers_config(rig, bt):
-    # pairing usually happens just before music starts: keys are saved straight away
+def test_housekeeping_defers_pairing_and_config_while_streaming(rig, bt):
+    # phase 0: a flash write during A2DP can hang the board, so even a new
+    # pairing waits until playback stops
     from gitmatrix import _boot
 
     set_plugins(rig.root, ["clock"])
@@ -91,10 +92,11 @@ def test_housekeeping_saves_new_pairing_but_defers_config(rig, bt):
     bt.keys, bt.keys_dirty, bt.streaming_now = b"k", True, True
     rt.config.set("delay", 9)
     _boot.housekeeping(rt, rig.clock.advance(10))
-    assert (rig.root / "bt_link_keys.bin").read_bytes() == b"k"
+    assert not (rig.root / "bt_link_keys.bin").exists()
     assert rt.config.dirty
     bt.streaming_now = False
     _boot.housekeeping(rt, rig.clock.advance(10))
+    assert (rig.root / "bt_link_keys.bin").read_bytes() == b"k"
     assert not rt.config.dirty
 
 
