@@ -127,7 +127,7 @@ main.py
 - No WiFi configured → AP `GitMatrix` at 192.168.4.1 + captive DNS. AP is **WPA2** with a default password **`monalisa`** (user asked for `mona`; WPA2 requires 8–63 chars; changeable in `/gitmatrix_config.py`), shown on the display and in the menu's WiFi screen. AP turned off once STA connects. If the configured network fails for **1 min**, the AP starts as well while STA keeps retrying; it stops once STA connects.
 - Pages: Home (now showing, reorder/enable/disable, delay, Show now), Discover, Plugin settings, Notifications (test sender), Settings (brightness, volume, hostname, timezone, optional API token, alert sound on/off + quiet-hours schedule), Sounds (built-ins, upload/delete custom), WiFi (scan → pick → password → save → reboot), Bluetooth, System (usage, version, reboot, logs, plugin errors/quarantine).
 - **Scan while streaming** briefly starves A2DP → UI warns "audio may stutter" (or defer until paused).
-- **Implemented (phase 2)**: `gitmatrix._wifi` (state machine ticked every 500 ms from the asyncio loop; `WLAN.scan()` can't yield (one C call, up to 10 s, no async/per-channel form; core1 belongs to `bt_audio` so no thread), so it's isolated: setup mode scans once at boot before the event loop starts, and web rescans are explicit, rate-limited to one per 15 s (429 otherwise) and keep the watchdog fed via a soft Timer while Python tasks pause; `wifi.py` is an Art Matrix-compatible shim over it), `gitmatrix._web` (phew routes, JSON API under `/api/v1/`, static pages from `/html`, captive 302 to `/wifi.html` in AP mode), `gitmatrix._log` (RAM ring, never written to flash). Saving WiFi schedules a watchdog reboot (`gitmatrix.reboot()`), never `machine.reset()`. Discover, Plugin settings, Notifications and Sounds pages are placeholders. Not yet done: *hold 10 s → WiFi reset* (§2.2); use Forget network in the UI, or clear `wifi_ssid` in `/config.py`.
+- **Implemented (phase 2)**: `gitmatrix._wifi` (state machine ticked every 500 ms from the asyncio loop; `WLAN.scan()` can't yield (one C call, up to 10 s, no async/per-channel form; core1 belongs to `bt_audio` so no thread), so it's isolated: setup mode scans once at boot before the event loop starts, and web rescans are explicit, rate-limited to one per 15 s (429 otherwise) and keep the watchdog fed via a soft Timer while Python tasks pause; `wifi.py` is an Art Matrix-compatible shim over it), `gitmatrix._web` (phew routes, JSON API under `/api/v1/`, static pages from `/html`, captive 302 to `/wifi.html` in AP mode), `gitmatrix._log` (RAM ring, never written to flash). Saving WiFi schedules a watchdog reboot (`gitmatrix.reboot()`), never `machine.reset()`. Discover, Plugin settings, Notifications and Sounds pages were placeholders (filled in by phases 3 and 4). Not yet done: *hold 10 s → WiFi reset* (§2.2); use Forget network in the UI, or clear `wifi_ssid` in `/config.py`.
 
 ### 2.8 Security (matches Art Matrix)
 - Web UI and API are **open on the LAN** by default, like Art Matrix.
@@ -162,7 +162,7 @@ main.py
 - **Text + image together**: image ≤7 px wide = icon fixed at the left, text scrolls in the remaining 45-46 columns; otherwise image is shown first (with its scroll rules), then the text.
 - **Plugin-forcing**: switch to any installed (even disabled, never quarantined) plugin, set `gitmatrix.notification = data`, call `on_notify(data)`, show for `duration`, then restore.
 - **Sounds**: built-ins (confirmed) in `/sounds/` (`chime`, `ping`, `alert`, `success`, `error`, `doorbell`, `coin`), 16-bit mono 22.05 kHz WAV; playback is cancellable (dismiss).
-- **Playback (decision: fallback)**: if A2DP is streaming, pause the sink (AVRCP pause if available, else stop feeding I2S / `bt_audio.deinit()` — spike 0c decides), play the WAV through `machine.I2S` (mono duplicated to both channels, since only left is audible), then resume. Nothing streaming → just play. If the spike shows A2DP can't be paused cleanly, sounds play only when idle and the notification shows silently.
+- **Playback (as built after spike 0c, see §7)**: nothing streaming → play the WAV through `machine.I2S` (mono duplicated to both channels, since only left is audible). A2DP streaming → **show silently by default**; opt-in "interrupt audio" plays high-priority sounds over the stream through I2S (the tone replaces the stream, which resumes by itself ~2.5 s later), with `bt_audio.deinit()` → play → `init()` kept as a fallback behind the same policy function.
 - **Custom sounds**: upload/delete named WAVs via web UI and `POST/DELETE /api/v1/sounds/{name}` (≤256 KB each, 2 MB total), usable as `"sound": "<name>"`.
 - **Alert sound control**: `Sound on/off` and **quiet hours** (start/end time, days) in web UI + device `Alerts` menu + API/MQTT. When muted, notifications still show but play no sound; a user option **"High priority bypasses quiet hours"** (web UI + API/MQTT, default off) lets `priority: high` notifications still play sound.
 
@@ -183,7 +183,7 @@ main.py
 1. **Core runtime + baseline BT** ✅: boot, config, display host, plugin loader + fault containment, crash marker/safe mode, encoder events, snappy menu, BT speaker "GitMatrix", `audio`/`mic` API, port existing widgets (Graph, Clock, Stars…) + demos as built-in plugins.
 2. **Networking + security** ✅ (host-tested; on-device checks below): wifi, AP provisioning + captive portal, scan/save/reboot, mDNS, WPA2 setup AP + fallback AP, optional API token, web UI skeleton.
 3. **Plugin store** ✅ (host-tested; on-device checks in §5.2, design as built in §6): repo from `/gitmatrix_config.py`, index cache, discover/search, transactional install/update/remove, settings schema + secrets, state API, single flash writer (no writes while A2DP streams).
-4. **Notifications**: API, queue, limits, text/PNG renderer + scroll/scale rules, plugin-forcing, sounds (pause-A2DP fallback), custom sounds, quiet hours.
+4. **Notifications** ✅ (host-tested; on-device checks in §5.3, design as built in §7): API, queue, limits, text/PNG renderer + scroll/scale rules, plugin-forcing, sounds (silent while streaming, opt-in interrupt), custom sounds, quiet hours.
 5. **REST API v1 complete** (status, events, plugins, sound, brightness/volume).
 6. **Home Assistant**: async MQTT + discovery.
 7. **Docs**: porting guide, compatibility table, plugin template, examples.
@@ -220,6 +220,23 @@ main.py
 - [ ] A ported Art Matrix plugin's `config.html` renders at `/config?plugin=<name>` and `process_config(form)` is called on save.
 - [ ] The three example plugins from `martinwoodward/gitmatrix-plugins` install, run and keep their settings across an update.
 
+### 5.3 Phase 4 on-device checklist (not yet run; host harness only)
+- [ ] Each built-in sound (`chime`, `ping`, `alert`, `success`, `error`, `doorbell`, `coin`) plays from the Sounds page on the left channel at the set volume, with no clicks at start/end; `amp_en` goes low afterwards.
+- [ ] `asyncio.StreamWriter(i2s)` + `drain()` works on 1.29 (else switch `_sounds._writer` to an `i2s.irq` path); the display and web UI keep running during a 3 s sound.
+- [ ] While A2DP streams, a notification shows **silently** by default; the log says so and `/api/v1/sounds` `last_result` is `streaming`.
+- [ ] With "High priority sounds play over Bluetooth audio" on, a `priority: high` sound plays over the stream, A2DP comes back by itself (~2.5 s), no underruns are logged and nothing hangs. Repeat 10+ times before considering making it the default.
+- [ ] Fallback: set `_sounds.INTERRUPT_MODE = "restart"`; the sound plays after `deinit()`, the board re-inits as "GitMatrix" with its pairing, and the log says the source must reconnect.
+- [ ] Rendering on picovector: a 53×7 PNG is centred, a 200×7 PNG scrolls sideways, a 53×40 PNG scrolls up, a 400×64 PNG scales to 7 rows (the scaled `blit` looks right), a 7×7 icon + text keeps the icon fixed.
+- [ ] Memory: a 2048×64 PNG (≤ 32 KB file) decodes and scales without `MemoryError`; free RAM before/after.
+- [ ] `POST /api/v1/notify` with a 70 KB body gets 413 straight away (before the body is read); the 202 path for a normal body.
+- [ ] Upload a 256 KB WAV from the Sounds page (raw body over phew: RAM peak), play it, delete it; a 2nd upload past 2 MB total gets 413.
+- [ ] Upload while streaming: the sound shows "waiting for Bluetooth audio to stop" and is written once playback stops; no hang.
+- [ ] Button: first press dismisses (and stops the sound), the second within 2 s opens the menu; with the menu open a high note waits and the top-right pixel blinks red; it shows after leaving the menu.
+- [ ] Quiet hours with the real (NTP) clock: a window across midnight on selected days silences sounds; "High priority notifications ring during quiet hours" lets high ones play. The Alerts menu toggles match the web page.
+- [ ] Forced plugin: `{"plugin": "<disabled plugin>", "data": {…}}` shows it with `on_notify(data)`, then the previous plugin, its rotation timer and payload come back.
+- [ ] `image_url`/`sound_url` over HTTPS (`CERT_NONE`) prefetch before showing, without stalling the display; a 404 URL drops the note with `last_error`.
+- [ ] Flash space: `/sounds` (~160 KB) fits alongside the plugins; `os.statvfs` afterwards.
+
 ## 6. Phase 3 (plugin store) as built
 
 Host-tested (`gitmatrix/tests/test_store.py`, `test_flash.py`); on-device checks in §5.2.
@@ -245,3 +262,23 @@ A flash write while A2DP streams can hang the board (a 64 KB write hung it 2/2 r
   - Install, Remove, plugin settings and `/config` saves answer 409 `{"error": "Bluetooth audio will disconnect; reconnect your device", "audio_streaming": true}` unless the request has `pause_audio` (or `queue` for installs, which downloads first and waits for playback to stop before writing). The UI asks: OK = stop the audio now, Cancel = wait (installs only).
   - WiFi save/forget, Bluetooth Forget, `gitmatrix.reboot()`, shutdown and the crash path pause implicitly (reboot/shutdown/crash without resuming); WiFi save/forget replies carry a `warning`.
 - `tools/deploy.py` writes files over USB: stop playback first.
+
+> **Update (later phase 0 runs)**: 9/9 further 64 KB writes while streaming were fine, so the earlier hang was partly a misread. The `_flash` deferral stays as a precaution, but phase 4 adds no new 409s.
+
+## 7. Phase 4 (notifications) as built
+
+Host-tested (`gitmatrix/tests/test_notify.py`, `test_sounds.py`, `test_web.py`, `test_menu.py`); on-device checks in §5.3.
+
+- **Modules**: `gitmatrix/_notify.py` (validation, queue, quiet hours, sound policy, renderer, `Notifier` task), `_png.py` (size checks before decoding, fit, decode with picovector `image.load`), `_sounds.py` (library, uploads, I2S playback, `alert()`), `_host.py` (NOTIFY display mode: preempt/restore, plugin-forcing). Sounds are made by `tools/make_sounds.py` (procedural, no samples) into `firmware/sounds/`.
+- **Request** (§2.10 shape): unknown fields → 400. `text` ≤ 500 chars; `image` (base64, ≤ 32 KB, header ≤ 2048×64 checked before decoding) or `image_url`; one of `sound` (built-in or custom name), `sound_url` (≤ 256 KB) or `sound_data` (base64 WAV ≤ 32 KB); `plugin` + `data` can't be combined with text/image (400); unknown plugin/sound → 400, quarantined plugin → 409; `duration` 0-60 s (default: automatic, plugins 10 s); `repeat` 1-5 (content passes, the sound plays once); `ttl` default 600 s (max 1 day); `speed` 5-100 px/s (default 25); `color` `#rrggbb`; `font`; `id` ≤ 64 chars. The body limit (64 KB) is checked from `Content-Length` in phew before reading (413).
+- **API**: `POST /api/v1/notify` → `202 {"id", "queued"}`; `DELETE /api/v1/notify[?id=]` dismisses the current note and clears the queue (or removes one); `GET /api/v1/notify` = status (active, queued, shown, dropped, last error). 429 when the queue (8 notes) is full. `/api/v1/status` includes `notifications`.
+- **Queue**: rank = priority, then age; a normal note that has waited 60 s ranks with a fresh high one (no starvation). Expired notes are dropped; a new note with the same `id` replaces the queued one, or takes over the screen from the one showing.
+- **Prefetch**: `image_url`/`sound_url` are fetched (`CERT_NONE`, 15 s timeout, size caps) before the note is shown; the asyncio loop keeps running. A failed fetch drops the note and records `last_error`.
+- **Display**: preemption saves the current plugin, rotation timer and payload; the note is drawn by a pre-built `Renderer` (no allocation per frame). Still content shows 3 s per pass; scrolling content scrolls once per pass. Image rules and text + icon layout as §2.10.
+- **Plugin-forcing**: any plugin on disk (even disabled, never quarantined) is loaded, `gitmatrix.notification = data`, `on_notify(data)` is called (guarded), shown for `duration`, then `gitmatrix.notification = None` and the previous plugin is restored.
+- **Button**: a press during a note dismisses it (and stops the sound); a press within 2 s after that opens the menu. While the menu is open notes wait; if a high-priority note waits, the top-right pixel blinks red.
+- **Sound policy** (`_notify.sound_policy`, used only by `_sounds.alert`): `alert_sound` off → silent; quiet hours (start/end, days; a window past midnight belongs to the day it starts) → silent unless `quiet_bypass_high` and the note is high; A2DP streaming → silent unless `alert_interrupt_audio` and the note is high. Interrupt mode `i2s` (default) plays over the stream; `restart` (fallback) does `_flash.pause()` → play → re-init.
+- **Playback**: 16-bit PCM WAV, mono or stereo, 8-48 kHz; mono is duplicated to both channels; volume follows the device volume; chunks of 1024 frames through a viper loop into fixed buffers; `amp_en` on only while playing; cancellable.
+- **Custom sounds**: `/data/sounds/<name>.wav`; `GET /api/v1/sounds`, `GET/POST/DELETE /api/v1/sounds/{name}` (POST: raw `audio/wav` body or `{"data": base64}`; ≤ 256 KB each, 2 MB total → 413; built-in names can't be overwritten or deleted → 400), `POST /api/v1/sounds/{name}/play`. Writes go through `_flash`; while streaming an upload is held in RAM (256 KB total, else 503) and written once playback stops (202 `{"queued": true}`). No new 409s.
+- **Settings**: `alert_sound`, `quiet_hours_enabled`, `quiet_hours` (`["22:00", "07:00"]`), `quiet_days` (0 = Monday), `quiet_bypass_high`, `alert_interrupt_audio` in `/api/v1/settings` (plus read-only `quiet_now`); device menu Alerts → Sound / Quiet hrs / Urgent rings.
+- **Web UI**: Notifications page (status and queue with Dismiss/Remove, send form with text/image/colour or plugin + JSON data, sound, priority, duration, curl example, alert sound and quiet hours settings) and Sounds page (list with Play/Delete, usage, upload).

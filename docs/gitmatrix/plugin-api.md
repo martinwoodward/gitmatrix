@@ -22,7 +22,7 @@ in `config.py` is added switched off, and you can turn it on from **Menu → Plu
 
 ### Hooks
 
-Every hook is optional and called with no arguments, except `on_input`.
+Every hook is optional and called with no arguments, except `on_input` and `on_notify`.
 
 | Hook | When |
 | --- | --- |
@@ -33,7 +33,7 @@ Every hook is optional and called with no arguments, except `on_input`.
 | `on_input(event)` | only for `"input": true` plugins: an encoder turn (`event.kind == "turn"`, `event.value` = detents ±) |
 | `process_config(form)` | Art Matrix style: the plugin's `config.html` form was posted (a dict of strings); save what you need |
 | `on_settings()` | the schema settings changed in the web UI (otherwise the plugin is reloaded) |
-| `on_notify(n)` | reserved: alerts (phase 2) |
+| `on_notify(data)` | a notification forced this plugin on screen (after `on_show()`); `data` is the request's JSON `data` (or `None`). See [Notifications](#notifications) |
 
 Plugins draw with picovector into `screen`, a 53×7 image owned by the plugin.
 `display.update()` inside a plugin does nothing: the runtime composites, handles
@@ -190,6 +190,42 @@ gitmatrix.WIDTH, gitmatrix.HEIGHT   # 53, 7
 
 `gitmatrix.state()` and `gitmatrix.settings()` work out the calling plugin automatically
 inside hooks. Pass a name to use them anywhere else.
+
+### Notifications
+
+A notification can force a plugin on screen and hand it data:
+
+```sh
+curl -X POST http://gitmatrix.local/api/v1/notify -H 'Content-Type: application/json' \
+  -d '{"plugin": "my_plugin", "data": {"status": "failed", "repo": "octo/app"}, "duration": 15}'
+```
+
+Any installed plugin can be forced, even one that is switched off (it is loaded for the
+notification and unloaded again afterwards); a quarantined plugin can't (409). The
+runtime saves what was on screen, calls `on_show()`, sets `gitmatrix.notification` to
+`data`, calls `on_notify(data)`, and keeps calling `update()` for `duration` seconds
+(default 10, max 60). Then `on_hide()` runs, `gitmatrix.notification` goes back to
+`None` and the previous plugin, its rotation timer and payload are restored. A knob press
+dismisses it early.
+
+```python
+import gitmatrix
+
+alert = None
+
+def on_notify(data):
+    global alert
+    alert = data            # the same object as gitmatrix.notification
+
+def update():
+    if gitmatrix.notification:      # shown by a notification
+        ...                         # draw from gitmatrix.notification["status"]
+    else:
+        ...                         # normal rotation
+```
+
+`data` is whatever JSON the sender gave (any type), so check it before use. Errors in
+`on_notify` count towards quarantine like any other hook.
 
 ## Fault containment
 
