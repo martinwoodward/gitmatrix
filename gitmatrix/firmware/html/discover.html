@@ -31,7 +31,6 @@
     <select id="auto-days" style="width:auto">
       <option value="1">day</option><option value="7">week</option><option value="14">2 weeks</option><option value="30">30 days</option>
     </select></label>
-  <p class="muted" id="auto-text"></p>
 </section>
 <div class="cards" id="cards"></div>
 </main>
@@ -123,10 +122,6 @@ function renderUpdates(u) {
     if (![...sel.options].some((o) => Number(o.value) === u.auto_update_days)) sel.append(el("option", { value: u.auto_update_days }, u.auto_update_days + " days"));
     sel.value = String(u.auto_update_days);
   }
-  $("#auto-text").textContent = !u.auto_update ? "Off: updates only install when you choose."
-    : !u.clock_set ? "On. Waits until the clock is set from the internet."
-    : u.next_check_in_s ? "On. Next check in " + fmtWhen(u.next_check_in_s) + ". Updates wait until Bluetooth audio stops."
-    : "On. Checking soon. Updates wait until Bluetooth audio stops.";
 }
 
 async function batch(path, body) {
