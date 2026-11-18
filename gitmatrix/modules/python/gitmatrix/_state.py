@@ -312,8 +312,13 @@ class Settings:
         return {k: (bool(v) if self.is_secret(k) else v) for k, v in self._values.items()}
 
     def update(self, values, strict=False):
-        """Validate and persist new values (unknown keys ignored, "" or None clears
-        a secret). strict raises ValueError naming the first bad field, saving nothing."""
+        """Validate and persist new values ("" or None clears a secret). Unknown keys
+        are ignored, or with strict (the web API) rejected; strict raises ValueError
+        naming the first bad field, saving nothing."""
+        if strict:
+            unknown = sorted(k for k in values if k not in self.fields)
+            if unknown:
+                raise ValueError("unknown setting(s): " + ", ".join(unknown))
         stored = _read_json(self.values_path, {})
         secrets = _read_json(self.secrets_path, {})
         secrets_changed = False

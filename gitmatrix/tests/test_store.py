@@ -470,6 +470,9 @@ def test_settings_api_never_returns_secrets(web, bt):
     assert _state.settings("feed")["token"] is None
     assert call("POST", "/api/v1/plugins/feed/settings", {"feed": "ftp://x"}).status == 400
     assert call("POST", "/api/v1/plugins/feed/settings", {"mode": "z"}).status == 400
+    r = call("POST", "/api/v1/plugins/feed/settings", {"mode": "a", "colur": "00FF00"})
+    assert r.status == 400 and "unknown setting(s): colur" in r.json["error"]
+    assert _state.settings("feed")["mode"] == "b"   # nothing saved
 
 
 def test_settings_save_calls_on_settings(web, bt):
