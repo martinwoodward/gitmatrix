@@ -10,7 +10,7 @@ from gitmatrix._display import HEIGHT, WIDTH, ease_in_quart
 
 SNAP_THRESHOLD = 1      # turns needed to snap to the next item
 SNAP_TIMEOUT_MS = 800
-SNAP_SPEED = 1.5        # how snappily the next item slides in
+SNAP_SPEED = 3.0        # how snappily the next item slides in (~0.55 s at 60 fps)
 PEEK_AMOUNT = 0.45      # how far the next item peeks in (eased)
 GLOW = True
 IDLE_MS = 30000         # close the menu after this long without input
@@ -114,7 +114,7 @@ class Snappy:
     def step(self, now, frames=1.0):
         speed = 0.01 * SNAP_SPEED * frames
         if self.value >= SNAP_THRESHOLD:
-            self.offset += speed
+            self.offset += speed * self.value   # more clicks mid-slide hurry it along
         elif self.value > 0:
             self.offset = self.value * PEEK_AMOUNT
 

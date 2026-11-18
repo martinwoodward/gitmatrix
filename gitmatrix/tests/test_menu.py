@@ -352,3 +352,20 @@ def test_input_ring_drops_oldest(clock):
         inp.push("turn", i)
     events = inp.since(0)
     assert len(events) == RING and events[0].value == 5
+
+
+def test_snappy_slide_lands_quickly_and_extra_clicks_hurry_it():
+    def frames_to_land(clicks):
+        s = _menu.Snappy(["a", "b", "c"])
+        s.step(0)  # settle on the first item
+        for _ in range(clicks):
+            s.turn(1, 0)
+        n = 0
+        while s.animating():
+            n += 1
+            s.step(n * 16)
+        return n
+
+    one = frames_to_land(1)
+    assert one <= 40   # ~0.65 s at 60 fps
+    assert frames_to_land(2) < one
