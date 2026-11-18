@@ -1,6 +1,6 @@
 # GitMatrix firmware plan (v3: reviews + answered questions)
 
-> v3 decisions: sounds via pause-A2DP → `machine.I2S` → resume; watchdog reboot + quarantine for hung plugins; **security matches Art Matrix** (`CERT_NONE`, open LAN UI, optional token); plugin repo set in a firmware config file only; WPA2 setup AP with a default password; fallback AP after 1 min; firmware lives in this repo (to be renamed `gitmatrix`); notification quiet mode/schedule.
+> v3 decisions: sounds via pause-A2DP → `machine.I2S` → resume; watchdog reboot + quarantine for hung plugins (revised in the integration pass: a soft-timer hang watch stops and quarantines them in place; the watchdog is only the last resort, §2.3); **security matches Art Matrix** (`CERT_NONE`, open LAN UI, optional token); plugin repo set in a firmware config file only; WPA2 setup AP with a default password; fallback AP after 1 min; firmware lives in this repo (to be renamed `gitmatrix`); notification quiet mode/schedule.
 
 GitMatrix = the Pimoroni 53×7 "GitHub Contribution Widget" (RP2350, 8 MB PSRAM, 16 MB flash,
 CYW43 WiFi+BT, I2S amp, rotary encoder + push button, status LEDs, light sensor), running a
@@ -76,10 +76,10 @@ main.py
   - Alerts: `Sound on` / `Sound off` / `Quiet hours` (uses the schedule set in the web UI) — §2.10.
   - Brightness/Volume: turn adjusts with live bar, press saves.
   - WiFi: scrolls `http://gitmatrix.local  192.168.1.42  <SSID>`; in AP mode `Join WiFi "GitMatrix" then http://192.168.4.1` + scrolls the AP password.
-  - Bluetooth: `GitMatrix  connected/streaming/not paired`; submenu `Pairable`, `Forget devices`, `< Back`.
+  - Bluetooth: `GitMatrix  connected/streaming/not paired`; submenu `Status`, `Forget all`, `Pairable on/off`, `< Back`. As built: the Pairable item (and the web toggle) only appear when `bt_audio.set_pairable` exists, which it doesn't on 1.29; `POST bluetooth/pairable` answers 501 there.
   - 30 s inactivity returns. Plugins paused (and their tasks suspended, §2.3) while the menu is open.
 - Turning in plugin mode = previous/next plugin. A plugin with `"input": true` instead reads `gitmatrix.input.events()` (host-owned, sequence-numbered snapshot, so the menu and HA see the same events). Button is reserved.
-- Boot: hold button → safe mode (no plugins). Hold 10 s → WiFi reset to AP setup.
+- Boot: hold button → safe mode (no plugins). While running, hold 10 s → WiFi reset to AP setup, in place (as built: §2.7).
 
 ### 2.3 Plugin runtime & fault containment
 - **All hooks guarded**: import, `update()`, `process_config()`, settings callbacks, optional `on_show()`, `on_hide()`, `on_notify(data)`, `on_input(evt)`. Errors recorded for the web UI; 5 consecutive failures → quarantine; `MemoryError` → `gc.collect()` + skip frame.
@@ -190,10 +190,37 @@ Built in phase 5; full reference in [api.md](api.md), design as built in §8.
 6. **Home Assistant** ✅ (host-tested; on-device checks in §5.5, design as built in §9, reference in [api.md](api.md#mqtt-and-home-assistant)): optional async MQTT client + discovery, configured on the Settings page, applied without a reboot.
 7. **Docs** ✅: [porting guide](porting.md) with a worked example, compatibility tables in [plugin-api.md](plugin-api.md#compatibility-with-art-matrix), [plugin template](../../gitmatrix/templates/plugin/README.md) (host-tested), [docs index](README.md); the `/config` page gained Art Matrix's `data-autosave` script (debounced) and "Reset to defaults" button so artmatrix-plugins `config.html` files work unchanged; stale reboot/flash notes corrected against [phase0.md](phase0.md).
 
+8. **Integration + reboot-free** ✅ (host-tested; on-device checks in §5.0, as built in §10): merged the on-device verification fixes (phase 3 + 1.29 fixes) into phases 4-7, ported the 1.29 lessons to the newer modules, replaced the hung-plugin warm reset with a soft-timer hang watch, applied WiFi save/forget/hostname in place, added the 10 s knob-hold WiFi reset, hid the unsupported pairable toggle, rejected unknown plugin settings keys (400) and retried the first index refresh quickly.
+
 ## 5. Testing
 - CPython host harness with stubbed picovector/`screen` for unit tests: loader fault containment, settings schema + secret redaction, notification validation/limits/scroll rules, install reconciliation, config migration.
 - On-device smoke + soak via `mpremote`: boot, AP, install, notify, 1-hour streaming soak logging `underruns()`, power-cut-during-install.
 - ruff with artmatrix config.
+
+### 5.0 Consolidated on-device checklist (everything not yet verified on hardware)
+One list to run on the widget; details are in the per-phase lists below (§5.1-5.5). Record results in [ondevice.md](ondevice.md).
+
+Integration / reboot-free (new):
+- [ ] Hang watch: a plugin with `while True: pass` in `update()` is stopped after ~5 s with "<name> hung and was stopped", quarantined (`!` in the menu), and the device keeps running with no reset. Same for `time.sleep(30)` in a hook and a hang in `on_show`/`process_config`.
+- [ ] `micropython.schedule(micropython.kbd_intr, None)` is accepted by the rp2 1.29 build (System → Logs shows "hang watch on" after boot, not "hang watch off").
+- [ ] A Ctrl-C from `mpremote` with nothing hung still reaches the REPL (the watch only consumes its own trips).
+- [ ] A viper/native busy loop (which the watch can't interrupt) meets the 8 s watchdog; note whether the chip hangs and needs the replug the docs describe.
+- [ ] WiFi page Save & join to a new network: joins in place with no reboot, `gitmatrix.local` answers, and the phew listening socket keeps serving after the STA/AP down-up cycle. Measure how long `active(False/True)` blocks inside housekeeping (watchdog stays fed).
+- [ ] Forget network (web) and the 10 s knob hold: the setup AP **GitMatrix** comes back in place, the message scrolls, the captive portal works, and joining from there works without a reboot. Holding the knob from power-on still means safe mode, not a WiFi reset.
+- [ ] Hostname change on the Settings page: the new name answers via mDNS after the in-place WiFi restart; the old one doesn't.
+- [ ] Bluetooth menu shows `Status`, `Forget all`, `< Back` (no Pairable) and the web page has no pairable toggle on 1.29.
+- [ ] Plugin index refresh right after joining: if the first fetch times out, it succeeds ~10 s later (log), not after a minute.
+- [ ] Plugins whose name starts with a lower-case letter show capitalised titles (`_compat.cap_first`, no `str.capitalize` on 1.29).
+- [ ] Phase 4-7 modules import on the device with no `SyntaxError` (they compile with mpy-cross 1.29 on the host): send a notification, a PNG, a sound, an `/events` long-poll and an MQTT connect once each.
+
+Carried over (not yet run):
+- [ ] Phase 2 (§5.1): captive portal on iOS/Android; fallback AP after a failed join; web rescan stall under A2DP; Timer feeding the watchdog inside `WLAN.scan()`; boot pre-scan list on first page load.
+- [ ] Phase 3 (§5.2): `bt_audio.deinit()` pause path keeps pairing/volume; install/settings/`/config` save while streaming (409, `pause_audio`, queued install); no flash writes during a 30-minute stream; power cut mid-install; flash staging for a large plugin.
+- [ ] Phase 4 (§5.3): every item (sounds, I2S `drain()`, silent-while-streaming, high-priority interrupt + restart fallback, PNG rendering/scaling/memory, 413 limits, sound upload, button dismiss, quiet hours with NTP, forced plugins, URL prefetch, flash space).
+- [ ] Phase 5 (§5.4): every item (status fields, `/events` latency/limits/leaks, streaming with long-polls, `POST /sound` results, show with duration, Bluetooth/WiFi events, Developer section, token 401s).
+- [ ] Phase 6 (§5.5): every item (asyncio TLS streams, HA discovery and control, device triggers, LWT, broker restarts, bad password, settings changes, streaming, memory).
+- [ ] Phase 7: an Art Matrix `config.html` with `data-autosave` saves on change and "Reset to defaults" works on the device.
+- [ ] General: menu and encoder by hand (snappy animation, Brightness/Volume live bars), safe mode with the knob held, 1-hour streaming soak logging underruns.
 
 ### 5.1 Phase 2 on-device checklist (run on device; results in `ondevice.md`)
 - [x] `network.WLAN.SEC_WPA2` exists on 1.29 and the setup AP really is WPA2 with `monalisa`.
@@ -341,3 +368,14 @@ Host-tested (`gitmatrix/tests/test_mqtt.py`, with a fake asyncio broker); on-dev
 - **Settings**: `mqtt_enabled`, `mqtt_host`, `mqtt_port`, `mqtt_user`, `mqtt_password` (write-only, never returned), `mqtt_tls`, `mqtt_discovery`, `mqtt_discovery_prefix`, `mqtt_base_topic` in `/config.py`; `GET/POST /api/v1/mqtt` validates all-or-nothing, saves when `_flash.can_write()` (else housekeeping saves later) and calls `reconfigure()`, which sends `offline` + DISCONNECT and reconnects. **No reboot path.**
 - **Web UI**: Settings page **MQTT & Home Assistant** section (fields, password set/clear, live status line).
 - **Security**: TLS uses `CERT_NONE` (no certificate check), like the plugin store. The password is stored in `/config.py` in plain text like the WiFi password.
+
+## 10. Integration + reboot-free pass as built
+- **Merge**: `martinwoodward-gitmatrix-ondevice-verification` (phase 3 + the fixes found on the device) merged into the phase 4-7 line; both sides kept in `_menu.py` (Alerts + on-device fixes), plugin-api.md, README and this plan.
+- **1.29 port**: the newer modules had no `*`/`**` unpacking in displays, `hexdigest()`, `builtins.<firmware global>` or warm-reset paths. One more gap found: `str.capitalize` doesn't exist on 1.29 (`_host.py`), now `_compat.cap_first`. `tests/test_micropython_syntax.py` now also scans the plugin template and examples, has a deny-list of methods missing on 1.29 (`capitalize`, `hexdigest`, `casefold`, …), and compiles every module with `mpy-cross` 1.29 when it is installed (`pip install mpy-cross==1.29.*`; skipped otherwise).
+- **Hang watch** (`_hang.py`, §2.3): a 0.5 s soft `machine.Timer` checks the running hook; after 5 s it schedules `micropython.kbd_intr`, `guard()` turns the `KeyboardInterrupt` into a quarantine ("hung in update (stopped after 5 s)") and the host carries on — no reset. Only started when `watchdog` is on. Not covered: viper/native loops (the 8 s hardware watchdog stays as the last resort; the docs say to unplug and replug if the display stays dark) and `gitmatrix.create_task` tasks.
+- **WiFi in place**: `WiFi.restart()` takes STA/AP down and up with the new settings; `POST wifi`, `POST wifi/forget` and a hostname change schedule it from housekeeping (`restarting_wifi: true`) instead of a reboot. `start()` now clears `ap_on` after deactivating, so the AP really comes back. The only reboots left are System → Reboot, `deploy.py --reset` and the crash path, all soft resets.
+- **Knob hold**: `_input` pushes `wifi_reset` once the knob has been held 10 s (`WIFI_RESET_MS`; not when held from power-on). The host closes the menu, clears `wifi_ssid`/`wifi_password`, saves (pausing audio for the flash write) and schedules the in-place WiFi restart into the setup AP. The event is also mirrored on the event bus (`encoder` `action: wifi_reset`).
+- **Menu**: kept `Plugins` and `Alerts` in the main menu because §2.2 records them as agreed (v3). The Bluetooth submenu drops `Pairable` when the firmware can't change it.
+- **Pairable**: hidden in the menu and web page when `bt_audio.set_pairable` is missing (1.29); `POST bluetooth/pairable` returns 501 rather than saving a setting that does nothing.
+- **Plugin settings**: unknown keys → 400 `unknown setting(s): …`, nothing saved (api.md already said so).
+- **Store**: a failed refresh retries after 10 s twice (`QUICK_RETRY_MS`, `QUICK_RETRIES`) before falling back to 60 s, so the ETIMEDOUT seen right after joining clears quickly.

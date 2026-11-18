@@ -110,7 +110,7 @@ def boot(input_=None, bt=None, network_=None):
     rt.watchdog = _Watchdog(config.get("watchdog", True))
     # stops a hung plugin hook without a reset; the watchdog is the last resort
     if config.get("watchdog", True):
-        _hang.start()
+        _log.log("hang watch on" if _hang.start() else "hang watch off (watchdog only)")
     rt.store = _store.Store()
     rt.store.feed = rt.watchdog.feed
     rt.loader = loader = PluginLoader(config, rt.compositor, rt.watchdog.feed)
