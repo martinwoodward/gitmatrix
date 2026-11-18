@@ -181,7 +181,7 @@ def _plugin_info(name):
 
         manifest = _loader.read_manifest(name)
         title = manifest.get("name") if isinstance(manifest.get("name"), str) else name
-    return {
+    info = {
         "name": name,
         "title": title,
         "enabled": name not in cfg.get("disabled_plugins", []) and name not in q,
@@ -192,8 +192,9 @@ def _plugin_info(name):
         "errors": plugin.error_count if plugin is not None else 0,
         "last_error": plugin.last_error if plugin is not None else None,
         "slow": bool(plugin.slow) if plugin is not None else False,
-        **_store_info(name),
     }
+    info.update(_store_info(name))
+    return info
 
 
 def _store_info(name):
@@ -371,7 +372,7 @@ def plugin_disable(_request, name):
     cfg = _config()
     disabled = cfg.get("disabled_plugins", [])
     if name not in disabled:
-        cfg.set("disabled_plugins", [*disabled, name])
+        cfg.set("disabled_plugins", disabled + [name])
     host = _host()
     showing = host.current is not None and host.current.name == name
     _runtime.loader.unload(name)
@@ -872,7 +873,9 @@ def bluetooth(_request):
 @api("/bluetooth/forget", ("POST",))
 def bluetooth_forget(_request):
     _host().menu_forget_bt()
-    return {"ok": True, **_bt_status()}
+    reply = {"ok": True}
+    reply.update(_bt_status())
+    return reply
 
 
 @api("/bluetooth/pairable", ("POST",))

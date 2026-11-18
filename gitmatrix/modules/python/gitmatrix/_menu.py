@@ -364,7 +364,7 @@ class Menu:
             self.stack[-1] = self._alerts_screen()
             return False
 
-        return SnappyScreen((*label(), "< Back"), select)
+        return SnappyScreen(tuple(label()) + ("< Back",), select)
 
     def _bluetooth_screen(self, start=0):
         api = self.api
