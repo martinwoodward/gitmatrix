@@ -126,6 +126,18 @@ class image(bytearray):  # noqa: N801 - device name
         pass
 
     def blit(self, src, a, b=None):
+        if isinstance(a, rect) and isinstance(b, rect) and (int(b.w), int(b.h)) != (int(a.w), int(a.h)):
+            # scaled blit, nearest neighbour (picovector scales to the target rect)
+            sp, dp = src.words, self.words
+            for y in range(int(b.h)):
+                ty = int(b.y) + y
+                for x in range(int(b.w)):
+                    tx = int(b.x) + x
+                    if 0 <= tx < self.width and 0 <= ty < self.height:
+                        sx = int(a.x) + x * int(a.w) // int(b.w)
+                        sy = int(a.y) + y * int(a.h) // int(b.h)
+                        dp[tx + ty * self.width] = sp[sx + sy * src.width]
+            return
         if isinstance(a, rect):
             dx, dy = int(b.x), int(b.y)
             sx, sy, sw, sh = int(a.x), int(a.y), int(a.w), int(a.h)
@@ -144,7 +156,95 @@ class image(bytearray):  # noqa: N801 - device name
 
     @staticmethod
     def load(data):
+        if isinstance(data, (bytes, bytearray, memoryview)) and bytes(data[:8]) == PNG_SIG:
+            w, h, rows = decode_png(bytes(data))
+            img = image(w, h)
+            px = img.words
+            for y, row in enumerate(rows):
+                for x, (r, g, b, a) in enumerate(row):
+                    px[x + y * w] = (a << 24) | (b << 16) | (g << 8) | r
+            return img
         return image(8, 8)
+
+
+PNG_SIG = b"\x89PNG\r\n\x1a\n"
+
+
+def decode_png(data):
+    """Tiny PNG decoder (8-bit grey/RGB/RGBA/palette, no interlace) so tests can
+    use real PNG bytes. Returns (w, h, rows of (r, g, b, a))."""
+    import struct
+    import zlib
+
+    pos, idat, palette, trns = 8, b"", None, None
+    while pos < len(data):
+        n, kind = struct.unpack(">I4s", data[pos:pos + 8])
+        body = data[pos + 8:pos + 8 + n]
+        pos += 12 + n
+        if kind == b"IHDR":
+            w, h, depth, ctype, _, _, interlace = struct.unpack(">IIBBBBB", body)
+            if depth != 8 or interlace:
+                raise ValueError("stub PNG: 8-bit, non-interlaced only")
+        elif kind == b"PLTE":
+            palette = [tuple(body[i:i + 3]) for i in range(0, n, 3)]
+        elif kind == b"tRNS":
+            trns = body
+        elif kind == b"IDAT":
+            idat += body
+    bpp = {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}[ctype]
+    raw = zlib.decompress(idat)
+    stride = w * bpp
+    prev = bytearray(stride)
+    rows = []
+    i = 0
+    for _ in range(h):
+        f = raw[i]
+        line = bytearray(raw[i + 1:i + 1 + stride])
+        i += 1 + stride
+        for x in range(stride):
+            a = line[x - bpp] if x >= bpp else 0
+            b = prev[x]
+            c = prev[x - bpp] if x >= bpp else 0
+            if f == 1:
+                line[x] = (line[x] + a) & 255
+            elif f == 2:
+                line[x] = (line[x] + b) & 255
+            elif f == 3:
+                line[x] = (line[x] + (a + b) // 2) & 255
+            elif f == 4:
+                p = a + b - c
+                pa, pb, pc = abs(p - a), abs(p - b), abs(p - c)
+                line[x] = (line[x] + (a if pa <= pb and pa <= pc else b if pb <= pc else c)) & 255
+        prev = line
+        row = []
+        for x in range(w):
+            px = line[x * bpp:(x + 1) * bpp]
+            if ctype == 0:
+                row.append((px[0], px[0], px[0], 255))
+            elif ctype == 2:
+                row.append((px[0], px[1], px[2], 255))
+            elif ctype == 3:
+                r, g, b = palette[px[0]]
+                row.append((r, g, b, trns[px[0]] if trns is not None and px[0] < len(trns) else 255))
+            elif ctype == 4:
+                row.append((px[0], px[0], px[0], px[1]))
+            else:
+                row.append(tuple(px))
+        rows.append(row)
+    return w, h, rows
+
+
+def make_png(w, h, pixel=lambda x, y: (255, 255, 255, 255)):
+    """RGBA PNG bytes for tests; pixel(x, y) -> (r, g, b, a)."""
+    import struct
+    import zlib
+
+    def chunk(kind, body):
+        return struct.pack(">I", len(body)) + kind + body + struct.pack(">I", zlib.crc32(kind + body))
+
+    raw = b"".join(b"\x00" + bytes(c for x in range(w) for c in pixel(x, y)) for y in range(h))
+    return (PNG_SIG + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 6, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
 
 
 class Display:
@@ -354,14 +454,59 @@ class Timer:
 
 class Pin:
     IN = 0
+    OUT = 1
     PULL_UP = 1
 
     def __init__(self, n, mode=None, pull=None):
         self.n = n
         self.level = 1
+        Pin.history.append((n, "init"))
 
-    def value(self):
-        return self.level
+    def value(self, v=None):
+        if v is None:
+            return self.level
+        self.level = int(v)
+        Pin.history.append((self.n, int(v)))
+        return None
+
+    history = []
+
+
+class I2S:
+    """machine.I2S stand-in: records what was written. drain() yields, like the
+    asyncio StreamWriter the device wraps around the real one."""
+
+    TX = 0
+    RX = 1
+    MONO = 0
+    STEREO = 1
+    opened = []
+
+    def __init__(self, id, sck=None, ws=None, sd=None, mode=TX, bits=16, format=STEREO, rate=22050, ibuf=8192):  # noqa: A002
+        self.id = id
+        self.rate = rate
+        self.bits = bits
+        self.format = format
+        self.data = bytearray()
+        self.closed = False
+        self.writes = 0
+        I2S.opened.append(self)
+
+    def write(self, buf):
+        self.data += bytes(buf)
+        self.writes += 1
+        return len(buf)
+
+    async def drain(self):
+        import asyncio
+        await asyncio.sleep(0)
+
+    def deinit(self):
+        self.closed = True
+
+    def samples(self):
+        """Interleaved signed 16-bit samples written so far."""
+        return list(memoryview(bytes(self.data)).cast("h"))
 
 
 class Encoder:
@@ -384,6 +529,10 @@ def _ptr8(buf):
     return memoryview(buf).cast("B")
 
 
+def _ptr16(buf):
+    return memoryview(buf).cast("H")
+
+
 def install():
     """Register the stub modules and the device globals in builtins."""
     machine = types.ModuleType("machine")
@@ -391,6 +540,7 @@ def install():
     machine.WDT = WDT
     machine.Pin = Pin
     machine.Timer = Timer
+    machine.I2S = I2S
     machine.WDT_RESET = 3
     machine.PWRON_RESET = 1
     machine.cause = 1
@@ -431,7 +581,7 @@ def install():
 
     g = {
         "color": color, "vec2": vec2, "rect": rect, "mat3": mat3, "shape": shape,
-        "font": font, "image": image, "ptr32": _ptr32, "ptr8": _ptr8,
+        "font": font, "image": image, "ptr32": _ptr32, "ptr8": _ptr8, "ptr16": _ptr16,
         "screen": image(), "display": Display(), "bt_audio": bt,
         "brush": types.SimpleNamespace(pattern=lambda *a: Pen(255, 255, 255)),
     }

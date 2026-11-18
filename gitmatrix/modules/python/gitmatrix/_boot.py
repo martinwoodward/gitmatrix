@@ -3,7 +3,7 @@
 import builtins
 
 import gitmatrix
-from gitmatrix import _audio, _compat, _flash, _log, _persist, _runtime, _state, _store
+from gitmatrix import _audio, _compat, _flash, _log, _notify, _persist, _runtime, _sounds, _state, _store
 from gitmatrix._config import Config, load_firmware_config
 from gitmatrix._display import Compositor, DisplayProxy
 from gitmatrix._host import Host
@@ -56,6 +56,7 @@ class Runtime:
         self.watchdog = None
         self.wifi = None
         self.store = None
+        self.notifier = None
         self.booted = 0
         self.healthy = False
 
@@ -111,6 +112,7 @@ def boot(input_=None, bt=None, network_=None):
 
     rt.host = host = Host(config, loader, rt.compositor, rt.input, gitmatrix.audio, safe)
     _flash.on_resume = host.apply_pairable
+    rt.notifier = host.notifier = _notify.Notifier(config, loader)
     if not safe:
         loader.load_all()
     host.start()
@@ -142,6 +144,7 @@ def housekeeping(rt, now):
             rt.config.save()
         if rt.store is not None:
             rt.store.flush()
+        _sounds.flush()
     if not rt.healthy and _compat.ticks_diff(now, rt.booted) > HEALTHY_MS:
         rt.healthy = True
         _persist.clear_boot()
@@ -220,6 +223,7 @@ async def _main(rt):
     import asyncio
 
     asyncio.create_task(_housekeeping(rt))
+    asyncio.create_task(rt.notifier.run())
     if rt.wifi is not None and rt.wifi.net is not None:
         asyncio.create_task(_wifi(rt))
         asyncio.create_task(_store_task(rt))

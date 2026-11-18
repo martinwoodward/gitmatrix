@@ -20,10 +20,17 @@ transition = "slide"
 brightness = 60
 volume = 64
 
-# Notification sounds (phase 2)
+# Notification sounds. Quiet hours ("HH:MM" local time; a window past midnight
+# belongs to the day it starts on) mute alerts on the listed days (0 = Monday).
+# Muted notifications still show, silently.
 alert_sound = True
 quiet_hours_enabled = False
-quiet_hours = (22, 7)
+quiet_hours = ("22:00", "07:00")
+quiet_days = [0, 1, 2, 3, 4, 5, 6]
+quiet_bypass_high = False
+# While Bluetooth audio is playing, notifications are silent unless this is on:
+# then high-priority sounds play over the stream (it drops out for a moment)
+alert_interrupt_audio = False
 
 # Reboot if the firmware stops responding for 8 s (and stop the plugin that hung)
 watchdog = True

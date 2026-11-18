@@ -20,7 +20,7 @@ VERSION = "0.1.0"
 WIDTH = 53
 HEIGHT = 7
 
-# Set by notifications (phase 2) when a plugin is forced on screen.
+# The JSON `data` of the notification that forced this plugin on screen (else None).
 notification = None
 
 # gitmatrix.input: encoder turns for plugins with "input": true. Set at boot.

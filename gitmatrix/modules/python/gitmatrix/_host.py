@@ -2,12 +2,14 @@
 # current plugin(s), composites and presents. Plugins only ever run inside
 # loader.guard(), so a broken one can't take the host down with it.
 
-from gitmatrix import _audio, _compat, _input, _menu, _runtime
+from gitmatrix import _audio, _compat, _input, _menu, _notify, _runtime
 
 PLUGIN = 0
 MENU = 1
+NOTIFY = 2
 
 TRANSITION_MS = 700
+WIDTH_PX = 53
 FRAME_MS = 16
 
 
@@ -31,6 +33,12 @@ class Host:
         self.message_since = 0
         self.surface = compositor.new_surface()   # host's own drawing surface
         self.frames = 0
+        self.notifier = None            # gitmatrix._notify.Notifier, set at boot
+        self.note = None                # the notification on screen
+        self.note_start = 0
+        self.renderer = None
+        self.forced = None              # Plugin forced on screen by a notification
+        self.saved = None               # (plugin, ms it had been showing) to restore
         _runtime.host = self
 
     # ---- rotation ---------------------------------------------------------------
@@ -107,6 +115,12 @@ class Host:
 
     def plugin_removed(self, name):
         """The loader quarantined a plugin; move on if it was on screen."""
+        if self.forced is not None and self.forced.name == name:
+            self.forced = None
+            if self.note is not None:
+                self.note.cancelled = True
+        if self.saved is not None and self.saved[0] is not None and self.saved[0].name == name:
+            self.saved = (None, 0)
         if self.prev is not None and self.prev.name == name:
             self.prev = None
         if self.current is not None and self.current.name == name:
@@ -145,7 +159,13 @@ class Host:
 
         if self.mode == MENU:
             if self.menu.frame(self.compositor.fb, events, now):
+                self._signal_waiting(now)
                 self.compositor.present()
+                return
+            events = []
+
+        if self.mode == NOTIFY:
+            if self._notify_frame(events, now):
                 return
             events = []
 
@@ -161,6 +181,12 @@ class Host:
                     self.loader.call(self.current, "on_input", e)
                 else:
                     delta += e.value
+
+        notifier = self.notifier
+        if notifier is not None and notifier.pending is not None:
+            note = notifier.take(now)
+            if note is not None and self.begin_notification(note, now) and self._notify_frame((), now):
+                return
 
         if delta and not self.message:
             self.step(delta, now)
@@ -208,6 +234,142 @@ class Host:
         _menu.blank(self.surface)
         _menu.draw_marquee(self.surface, text, _compat.ticks_diff(now, self.entered), color.oklch(200, 150, hue))
         self.compositor.present(self.surface)
+
+    # ---- notifications ----------------------------------------------------------
+
+    def begin_notification(self, note, now):
+        """Interrupt whatever is showing (remembering it) and show `note`."""
+        if self.note is None:
+            current = self.current
+            shown_for = _compat.ticks_diff(now, self.entered)
+            if current is not None and current.module is not None and current.shown:
+                self.loader.call(current, "on_hide")
+                current.shown = False
+            self.saved = (current, shown_for)
+            self.prev = None
+        else:
+            self._release_forced()
+        self.mode = NOTIFY
+        self.note = note
+        self.note_start = now
+        self.renderer = None
+        self.message = None
+        if note.plugin is not None:
+            if not self._force_plugin(note):
+                self.end_notification(now, False)
+                self.show_message(f"{note.plugin} can't be shown", 2500, 25, now)
+                return False
+        else:
+            self.renderer = _notify.Renderer(note, self.surface)
+        print(f"notify: {note.id}")
+        return True
+
+    def _force_plugin(self, note):
+        name = note.plugin
+        if name in self.config.get("quarantined", {}):
+            return False
+        plugin = self.loader.plugins.get(name)
+        if plugin is None or plugin.module is None:
+            plugin = self.loader.load(name)
+        if plugin is None or plugin.module is None:
+            return False
+        import gitmatrix
+        gitmatrix.notification = note.data
+        self.forced = plugin
+        self._reset_plugin_input(plugin)
+        ok, _ = self.loader.call(plugin, "on_show")
+        plugin.shown = ok
+        if self.forced is plugin:
+            self.loader.call(plugin, "on_notify", note.data)
+        return self.forced is plugin
+
+    def _release_forced(self):
+        import gitmatrix
+        plugin = self.forced
+        self.forced = None
+        gitmatrix.notification = None
+        if plugin is None:
+            return
+        if plugin.module is not None and plugin.shown:
+            self.loader.call(plugin, "on_hide")
+            plugin.shown = False
+        # a disabled plugin was only loaded for this; free it again
+        if plugin.name not in self.loader.enabled() and plugin is not (self.saved or (None,))[0]:
+            self.loader.unload(plugin.name)
+
+    def end_notification(self, now, dismissed):
+        """Finish the note on screen and put back what was showing."""
+        note = self.note
+        self._release_forced()
+        self.note = None
+        self.renderer = None
+        if self.notifier is not None and note is not None:
+            self.notifier.finished(note, dismissed, now)
+        self.mode = PLUGIN
+        saved, self.saved = self.saved, None
+        plugin, shown_for = saved if saved is not None else (None, 0)
+        if plugin is not None and plugin.module is not None and plugin in self.plugins():
+            self.current = plugin
+            self.entered = _compat.ticks_add(now, -shown_for)
+            self._reset_plugin_input(plugin)
+            ok, _ = self.loader.call(plugin, "on_show")
+            plugin.shown = ok
+        else:
+            self.current = None
+            plugins = self.plugins()
+            if plugins:
+                self._enter(plugins[0], now)
+        self.prev = None
+
+    def _notify_frame(self, events, now):
+        """One frame of the notification. Returns False once it has ended (so
+        the frame goes on to draw the restored plugin)."""
+        for e in events:
+            if e.kind == _input.PRESS:
+                self.end_notification(now, True)
+                return False
+            if e.kind == _input.TURN and self.forced is not None and self.forced.input:
+                self.loader.call(self.forced, "on_input", e)
+        note = self.note
+        notifier = self.notifier
+        elapsed = _compat.ticks_diff(now, self.note_start)
+        if note.cancelled:
+            self.end_notification(now, True)
+            return False
+        if self.forced is not None:
+            done = elapsed >= (note.duration or _notify.PLUGIN_MS)
+        else:
+            done = self.renderer.draw(self.surface, elapsed)
+        if note.replaced:
+            # a newer note with this id is being prepared: keep this one up until it's ready
+            done = notifier is not None and notifier.pending is not None
+        if done:
+            nxt = notifier.take(now) if notifier is not None and notifier.pending is not None else None
+            if nxt is None:
+                self.end_notification(now, False)
+                return False
+            notifier.finished(note, False, now)
+            return self.begin_notification(nxt, now) and self._notify_frame((), now)
+        if self.forced is not None:
+            self.loader.update(self.forced)
+            if self.forced is None or self.forced.module is None:
+                return True
+            self.compositor.present(self.forced.surface)
+        else:
+            if note.replaced and elapsed >= self.renderer.total_ms:
+                self.renderer.draw(self.surface, elapsed % self.renderer.pass_ms)
+            self.compositor.present(self.surface)
+        return True
+
+    def _signal_waiting(self, now):
+        """A high-priority note waits while the menu is open: blink a red pixel
+        in the top-right corner (the board has no spare status LED)."""
+        n = self.notifier
+        if n is None or not n.waiting_high() or (now // 250) % 2:
+            return
+        fb = self.compositor.fb
+        fb.pen = color.rgb(255, 0, 0)
+        fb.rectangle(WIDTH_PX - 1, 0, 1, 1)
 
     # ---- menu -------------------------------------------------------------------
 

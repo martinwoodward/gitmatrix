@@ -10,13 +10,14 @@
 
 import json
 
-from gitmatrix import _audio, _compat, _flash, _log, _runtime, _wifi
+from gitmatrix import _audio, _compat, _flash, _log, _notify, _runtime, _sounds, _wifi
 
 API = "/api/v1"
 COOKIE = "gm_token"
 REBOOT_DELAY_MS = 1500
 SCAN_WARNING = "audio may stutter while scanning"
 MAX_TOKEN = 64
+MAX_BODY = 64 * 1024        # any request body, checked before it is read
 
 _rt = None          # the boot Runtime
 _scan_task = None
@@ -265,6 +266,7 @@ def status(_request):
         "bluetooth": _bt_status(),
         "input": _input_status(),
         "token_required": _token() is not None,
+        "notifications": _notifier().status() if _notifier() is not None else None,
     }
 
 
@@ -728,6 +730,7 @@ def settings(request):
             if len(token) > MAX_TOKEN or any(c in token for c in " ;,\"'\\"):
                 raise ValueError("token: up to 64 characters, no spaces, quotes, ';' or ','")
             cfg.set("api_token", token or None)
+        _alert_settings(cfg, body)
         if _flash.can_write():
             cfg.save()      # else housekeeping saves it once playback stops
     out = {
@@ -739,6 +742,7 @@ def settings(request):
         "time_zones": [{"key": k, "label": v} for k, v in _zones()],
         "token_set": _token() is not None,
     }
+    out.update(_alert_values(cfg))
     if reboot:
         out["reboot_required"] = True
     resp = reply(out)
@@ -747,6 +751,46 @@ def settings(request):
         # the page that just set (or changed) the token keeps working
         resp.add_header("Set-Cookie", _set_cookie(token))
     return resp
+
+
+ALERT_FLAGS = ("alert_sound", "quiet_hours_enabled", "quiet_bypass_high", "alert_interrupt_audio")
+
+
+def _hhmm(value):
+    text = str(value).strip()
+    h, sep, m = text.partition(":")
+    if not sep or not h.isdigit() or not m.isdigit() or len(m) != 2 or int(h) > 23 or int(m) > 59:
+        raise ValueError("quiet hours: use HH:MM")
+    return f"{int(h):02d}:{m}"
+
+
+def _alert_settings(cfg, body):
+    for key in ALERT_FLAGS:
+        if key in body:
+            cfg.set(key, _bool(body[key]))
+    if "quiet_start" in body or "quiet_end" in body:
+        start, end, _ = _notify.quiet_window(cfg)
+        start = _hhmm(body["quiet_start"]) if "quiet_start" in body else f"{start // 60:02d}:{start % 60:02d}"
+        end = _hhmm(body["quiet_end"]) if "quiet_end" in body else f"{end // 60:02d}:{end % 60:02d}"
+        cfg.set("quiet_hours", (start, end))
+    if "quiet_days" in body:
+        days = body["quiet_days"]
+        if isinstance(days, str):
+            days = [d for d in days.split(",") if d.strip()]
+        days = sorted({int(d) for d in days})
+        if any(not 0 <= d <= 6 for d in days):
+            raise ValueError("quiet_days: 0 (Monday) to 6 (Sunday)")
+        cfg.set("quiet_days", days)
+
+
+def _alert_values(cfg):
+    start, end, days = _notify.quiet_window(cfg)
+    out = {k: bool(cfg.get(k, k == "alert_sound")) for k in ALERT_FLAGS}
+    out["quiet_start"] = f"{start // 60:02d}:{start % 60:02d}"
+    out["quiet_end"] = f"{end // 60:02d}:{end % 60:02d}"
+    out["quiet_days"] = list(days)
+    out["quiet_now"] = _notify.in_quiet_hours(cfg)
+    return out
 
 
 def _set_cookie(token):
@@ -883,6 +927,102 @@ def bluetooth_pairable(request):
 
 # ---- system -----------------------------------------------------------------
 
+# ---- notifications ------------------------------------------------------------
+
+def _notifier():
+    return _runtime.notifier
+
+
+@api("/notify", ("GET", "POST", "DELETE"))
+def notify(request):
+    n = _notifier()
+    if n is None:
+        return error(503, "notifications are not running")
+    if request.method == "GET":
+        return n.status()
+    if request.method == "DELETE":
+        nid = request.query.get("id") or (request.data.get("id") if isinstance(request.data, dict) else None)
+        return {"dismissed": n.dismiss(nid or None)}
+    try:
+        note = n.submit(request.data)
+    except _notify.NotifyError as e:
+        return error(e.status, _compat.error_text(e))
+    return {"id": note.id, "queued": len(n.queue)}, 202
+
+
+# ---- sounds -------------------------------------------------------------------
+
+@api("/sounds")
+def sounds_list(_request):
+    return {
+        "sounds": _sounds.listing(),
+        "pending": _sounds.pending(),
+        "used": _sounds.custom_total(),
+        "max_size": _sounds.MAX_CUSTOM,
+        "max_total": _sounds.MAX_CUSTOM_TOTAL,
+        "playing": _sounds.playing is not None,
+        "last_result": _sounds.last_result,
+    }
+
+
+def _upload_bytes(request):
+    if request.body:
+        return request.body
+    data = request.data if isinstance(request.data, dict) else {}
+    encoded = data.get("data")
+    if not isinstance(encoded, str):
+        raise ValueError("send the WAV as the body (audio/wav) or as base64 in 'data'")
+    import binascii
+    try:
+        return binascii.a2b_base64(encoded)
+    except (ValueError, binascii.Error) as e:
+        raise ValueError("data: bad base64") from e
+
+
+@api("/sounds/<name>", ("GET", "POST", "DELETE"))
+def sound_item(request, name):
+    if request.method == "GET":
+        for item in _sounds.listing():
+            if item["name"] == name:
+                return item
+        return error(404, f"no sound called {name}")
+    try:
+        if request.method == "DELETE":
+            if not _sounds.delete(name):
+                return error(404, f"no sound called {name}")
+            return {"deleted": name}
+        result = _sounds.save(name, _upload_bytes(request))
+    except _sounds.SoundError as e:
+        return error(e.status, _compat.error_text(e))
+    except OSError as e:
+        return error(500, f"could not save: {_compat.error_text(e)}")
+    if result == "queued":
+        return {"name": name, "queued": True, "message": "saved once Bluetooth audio stops"}, 202
+    return {"name": name, "saved": True}
+
+
+@api("/sounds/<name>/play", ("POST",))
+def sound_play(_request, name):
+    path = _sounds.find(name)
+    if path is None:
+        return error(404, f"no sound called {name}")
+    if _flash.streaming():
+        return {"played": False, "reason": "Bluetooth audio is streaming"}
+    if _sounds.playing is not None:
+        return {"played": False, "reason": "a sound is already playing"}
+    spawn(_sounds.play(path, _config()))
+    return {"played": True}
+
+
+def body_limit(request):
+    """Largest body phew may read for this request (sound uploads are bigger)."""
+    path = request.path
+    if (request.method == "POST" and path.startswith(API + "/sounds/") and not path.endswith("/play")
+            and not request.headers.get("content-type", "").startswith("application/json")):
+        return _sounds.MAX_CUSTOM + 1024
+    return MAX_BODY
+
+
 def _memory():
     import gc
 
@@ -1001,6 +1141,7 @@ def setup(rt=None):
     for path, handler, methods in _ROUTES:
         server.add_route(path, handler, methods)
     server.set_callback(catchall)
+    server.body_limit = body_limit
     return server
 
 

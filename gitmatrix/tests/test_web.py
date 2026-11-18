@@ -287,3 +287,122 @@ def test_device_settings_wait_for_playback_to_stop(web, bt):
     bt.streaming_now = False
     _boot.housekeeping(web.rt, web.clock.advance(1000))
     assert "delay = 17" in (web.root / "config.py").read_text()
+
+
+# ---- notifications and sounds (phase 4) ---------------------------------------
+
+def _b64(data):
+    import base64
+    return base64.b64encode(data).decode()
+
+
+def _wav(frames=100):
+    import struct
+    pcm = struct.pack(f"<{frames}h", *([500] * frames))
+    fmt = struct.pack("<HHIIHH", 1, 1, 22050, 44100, 2, 16)
+    body = b"WAVE" + b"fmt " + struct.pack("<I", 16) + fmt + b"data" + struct.pack("<I", len(pcm)) + pcm
+    return b"RIFF" + struct.pack("<I", len(body)) + body
+
+
+def test_notify_accepts_and_queues(web):
+    out = ok("POST", "/api/v1/notify", {"text": "build passed", "id": "ci", "sound": "success"})
+    assert out["id"] == "ci"
+    status = ok("GET", "/api/v1/notify")
+    assert [n["id"] for n in status["queued"]] == ["ci"]
+    assert ok("GET", "/api/v1/status")["notifications"]["queued"][0]["id"] == "ci"
+
+
+def test_notify_errors(web):
+    assert call("POST", "/api/v1/notify", {}).status == 400
+    assert call("POST", "/api/v1/notify", {"text": "x", "repeat": 9}).status == 400
+    assert call("POST", "/api/v1/notify", {"image": "A" * 50000}).status == 413
+    for i in range(8):
+        ok("POST", "/api/v1/notify", {"text": str(i)})
+    resp = call("POST", "/api/v1/notify", {"text": "full"})
+    assert resp.status == 429 and "full" in resp.json["error"]
+
+
+def test_notify_dismiss(web):
+    ok("POST", "/api/v1/notify", {"text": "a", "id": "a"})
+    ok("POST", "/api/v1/notify", {"text": "b", "id": "b"})
+    assert ok("DELETE", "/api/v1/notify?id=a")["dismissed"] == 1
+    assert ok("DELETE", "/api/v1/notify")["dismissed"] == 1
+    assert ok("GET", "/api/v1/notify")["queued"] == []
+
+
+def test_notify_needs_token_when_set(web):
+    web.rt.config.set("api_token", "s3cret")
+    assert call("POST", "/api/v1/notify", {"text": "x"}).status == 401
+    resp = call("POST", "/api/v1/notify", {"text": "x"}, {"authorization": "Bearer s3cret"})
+    assert resp.status == 202
+
+
+def test_sounds_upload_play_delete(web):
+    names = [s["name"] for s in ok("GET", "/api/v1/sounds")["sounds"]]
+    assert names[:2] == ["chime", "ping"]
+    from phew.server import Request
+    r = Request("POST", "/api/v1/sounds/bell", "HTTP/1.1")
+    r.headers = {"host": "gitmatrix.local", "content-type": "audio/wav"}
+    r.body = _wav()
+    assert _web.dispatch(r).status == 200
+    assert ok("POST", "/api/v1/sounds/horn", {"data": _b64(_wav())})["saved"]
+    assert {"bell", "horn"} <= {s["name"] for s in ok("GET", "/api/v1/sounds")["sounds"]}
+    assert ok("POST", "/api/v1/sounds/bell/play")["played"]
+    assert len(web.spawned) == 1
+    web.spawned.pop().close()
+    assert ok("POST", "/api/v1/notify", {"text": "x", "sound": "bell"})
+    assert ok("DELETE", "/api/v1/sounds/bell")["deleted"] == "bell"
+    assert call("DELETE", "/api/v1/sounds/bell").status == 404
+    assert call("DELETE", "/api/v1/sounds/chime").status == 400
+    assert call("POST", "/api/v1/sounds/chime", {"data": _b64(_wav())}).status == 400
+    assert call("POST", "/api/v1/sounds/x", {"data": _b64(b"nope")}).status == 400
+
+
+def test_sound_upload_while_streaming_is_queued_not_refused(web, bt):
+    bt.streaming_now = True
+    resp = call("POST", "/api/v1/sounds/later", {"data": _b64(_wav())})
+    assert resp.status == 202 and resp.json["queued"]
+    assert ok("GET", "/api/v1/sounds")["pending"] == ["later"]
+    assert not ok("POST", "/api/v1/sounds/chime/play")["played"]
+    bt.streaming_now = False
+    _boot.housekeeping(web.rt, web.clock.advance(1000))
+    assert "later" in {s["name"] for s in ok("GET", "/api/v1/sounds")["sounds"]}
+
+
+def test_alert_settings(web):
+    out = ok("POST", "/api/v1/settings", {"alert_sound": False, "quiet_hours_enabled": "on",
+                                          "quiet_start": "21:30", "quiet_end": "6:45",
+                                          "quiet_days": "0,1,2,3,4", "quiet_bypass_high": True})
+    assert out["alert_sound"] is False and out["quiet_hours_enabled"] and out["quiet_bypass_high"]
+    assert (out["quiet_start"], out["quiet_end"], out["quiet_days"]) == ("21:30", "06:45", [0, 1, 2, 3, 4])
+    assert out["alert_interrupt_audio"] is False
+    cfg = web.rt.config
+    assert cfg.get("quiet_hours") == ("21:30", "06:45")
+    assert call("POST", "/api/v1/settings", {"quiet_start": "25:00"}).status == 400
+    assert call("POST", "/api/v1/settings", {"quiet_days": [7]}).status == 400
+
+
+def test_body_limit_checked_before_reading(web):
+    from phew import server
+    from phew.server import Request
+
+    class Reader:
+        read_any = False
+
+        async def readexactly(self, n):
+            Reader.read_any = True
+            return b"{}"
+
+    def req(path, ctype, length):
+        r = Request("POST", path, "HTTP/1.1")
+        r.headers = {"content-type": ctype, "content-length": str(length)}
+        return r
+
+    with pytest.raises(server.BodyTooLarge):
+        asyncio.run(server._read_request_body(Reader(), req("/api/v1/notify", "application/json", 70000)))  # noqa: SLF001
+    assert not Reader.read_any
+    big_wav = req("/api/v1/sounds/x", "audio/wav", 200000)
+    asyncio.run(server._read_request_body(Reader(), big_wav))  # noqa: SLF001
+    assert big_wav.body == b"{}"
+    with pytest.raises(server.BodyTooLarge):
+        asyncio.run(server._read_request_body(Reader(), req("/api/v1/sounds/x", "application/json", 70000)))  # noqa: SLF001

@@ -82,6 +82,7 @@ class Request:
     self.protocol = protocol
     self.form = {}
     self.data = {}
+    self.body = b""
     self.query = {}
     query_string_start = uri.find("?") if uri.find("?") != -1 else len(uri)
     self.path = uri[:query_string_start]
@@ -267,7 +268,7 @@ status_message_map = {
   307: "Temporary Redirect", 308: "Permanent Redirect",
   400: "Bad Request", 401: "Unauthorized", 403: "Forbidden",
   404: "Not Found", 405: "Method Not Allowed", 406: "Not Acceptable",
-  408: "Request Timeout", 409: "Conflict", 410: "Gone",
+  408: "Request Timeout", 409: "Conflict", 410: "Gone", 413: "Payload Too Large",
   414: "URI Too Long", 415: "Unsupported Media Type",
   416: "Range Not Satisfiable", 418: "I'm a teapot",
   429: "Too Many Requests",
@@ -283,10 +284,29 @@ async def _read_request_head(reader):
   return request
 
 
+class BodyTooLarge(Exception):
+  pass
+
+
+# body_limit(request) -> max bytes (None: no limit); checked from Content-Length
+# before any of the body is read, so an oversized upload is never buffered
+body_limit = None
+
+RAW_TYPES = ("application/octet-stream", "audio/")
+
+
 async def _read_request_body(reader, request):
   if "content-length" not in request.headers or "content-type" not in request.headers:
     return
+  length = int(request.headers["content-length"])
+  limit = body_limit(request) if body_limit else None
+  if limit is not None and length > limit:
+    raise BodyTooLarge(length)
   content_type = request.headers["content-type"]
+  for raw in RAW_TYPES:
+    if content_type.startswith(raw):
+      request.body = await reader.readexactly(length)
+      return
   if content_type.startswith("multipart/form-data"):
     request.form = await _parse_form_data(reader, request.headers)
   if content_type.startswith("application/json"):
@@ -331,6 +351,9 @@ async def _serve_request(reader, writer):
 
   try:
     await uasyncio.wait_for_ms(_read_request_body(reader, request), REQUEST_BODY_TIMEOUT_MS)
+  except BodyTooLarge:
+    logging.error(f"! {request.method} {request.path} body too large")
+    response = ('{"error": "request body too large"}', 413, "application/json")
   except uasyncio.TimeoutError:
     logging.error(f"! {request.method} {request.path} body timed out")
     response = ("Request Timeout", 408, "text/plain")

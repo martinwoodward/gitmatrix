@@ -24,6 +24,7 @@ MAPPING = [
     ("firmware/lib/plugins", "/lib/plugins"),
     ("firmware/defaults", "/defaults"),
     ("firmware/html", "/html"),
+    ("firmware/sounds", "/sounds"),
     ("firmware/main.py", "/main.py"),
 ]
 

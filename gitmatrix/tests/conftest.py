@@ -15,7 +15,8 @@ import stubs  # noqa: E402
 FAKE_BT = stubs.install()
 
 import gitmatrix  # noqa: E402
-from gitmatrix import _flash, _persist, _runtime, _state  # noqa: E402
+from gitmatrix import _flash, _persist, _runtime, _sounds, _state  # noqa: E402
+import phew.server  # noqa: E402, F401 - grabs the event loop before any asyncio.run()
 
 gitmatrix.install_globals()
 
@@ -34,6 +35,8 @@ def root(tmp_path):
     shutil.copytree(os.path.join(FIRMWARE, "defaults"), tmp_path / "defaults")
     shutil.copytree(os.path.join(FIRMWARE, "lib"), tmp_path / "lib")
     shutil.copytree(os.path.join(FIRMWARE, "html"), tmp_path / "html")
+    shutil.copytree(os.path.join(FIRMWARE, "sounds"), tmp_path / "sounds")
+    _sounds._deferred.clear()  # noqa: SLF001
     old_root = _runtime.ROOT
     _runtime.ROOT = str(tmp_path)
     sys.path.insert(0, str(tmp_path / "lib"))
@@ -56,7 +59,8 @@ def root(tmp_path):
         _persist.set_store(old_store)
         _runtime.ROOT = old_root
         _runtime.host = _runtime.loader = _runtime.config = _runtime.current = None
-        _runtime.wifi = _runtime.reboot_at = None
+        _runtime.wifi = _runtime.reboot_at = _runtime.notifier = None
+        gitmatrix.notification = None
         _runtime.firmware = {}
         builtins.screen, builtins.display = screen, display
 
