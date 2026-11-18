@@ -563,6 +563,62 @@ def store_install(request):
     return out, 202
 
 
+@api("/store/updates", ("GET", "POST"))
+def store_updates(request):
+    """GET: updates available + auto-update settings. POST {auto_update?,
+    auto_update_days?} changes the settings."""
+    store, store_mod = _store()
+    if request.method == "POST":
+        body = _body(request)
+        cfg = _config()
+        if "auto_update_days" in body:
+            days = body["auto_update_days"]
+            if isinstance(days, str):
+                days = int(days)
+            if isinstance(days, bool) or not isinstance(days, int) or not 1 <= days <= store_mod.MAX_UPDATE_DAYS:
+                raise ValueError(f"auto_update_days must be 1-{store_mod.MAX_UPDATE_DAYS}")
+            cfg.set("auto_update_days", days)
+        if "auto_update" in body:
+            cfg.set("auto_update", _bool(body["auto_update"]))
+        if _flash.can_write():
+            cfg.save()      # else housekeeping saves it once playback stops
+    return store.updates_status()
+
+
+def _store_batch(request, check):
+    store, store_mod = _store()
+    body = _body(request)
+    apply = _bool(body.get("apply", False)) if check else True
+    if check:
+        wifi = _wifi_mgr()
+        if wifi is None or not wifi.connected():
+            return {"error": "not connected to the internet"}, 409
+    streaming = _flash.streaming()
+    try:
+        batch = store.begin_batch(check=check, apply=apply,
+                                  pause_audio=_bool(body.get("pause_audio", False)),
+                                  queue=_bool(body.get("queue", False)))
+    except store_mod.StoreError as e:
+        return _store_error(e, streaming)
+    spawn(store.run_batch())
+    out = {"batch": batch}
+    if streaming and apply:
+        out["warning"] = _flash.AUDIO_WARNING
+    return out, 202
+
+
+@api("/store/updates/check", ("POST",))
+def store_updates_check(request):
+    """{apply?, pause_audio?, queue?}: refetch the index; with apply, install every update."""
+    return _store_batch(request, True)
+
+
+@api("/store/updates/apply", ("POST",))
+def store_updates_apply(request):
+    """{pause_audio?, queue?}: install every update the current index offers."""
+    return _store_batch(request, False)
+
+
 def _store_error(e, streaming):
     out = {"error": str(e)}
     if e.status == 409 and streaming and str(e) == _flash.AUDIO_WARNING:

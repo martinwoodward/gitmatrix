@@ -32,6 +32,14 @@ quiet_bypass_high = False
 # then high-priority sounds play over the stream (it drops out for a moment)
 alert_interrupt_audio = False
 
+# Plugin updates: when on, every auto_update_days GitMatrix checks the plugin
+# store and installs updates for the plugins installed from it (waiting until
+# Bluetooth audio stops). auto_update_checked is when it last checked (seconds
+# since 1970, set by GitMatrix).
+auto_update = False
+auto_update_days = 7
+auto_update_checked = None
+
 # Reboot if the firmware stops responding for 8 s (and stop the plugin that hung)
 watchdog = True
 

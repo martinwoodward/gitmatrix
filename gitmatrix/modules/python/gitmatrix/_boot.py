@@ -236,12 +236,19 @@ async def _wifi(rt):
 
 
 async def _store_task(rt):
-    """Keep the plugin index fresh while online (Discover reads the cache)."""
+    """Keep the plugin index fresh while online (Discover reads the cache), and
+    run the automatic update check when it's switched on and due."""
     while True:
         await _sleep_ms(STORE_TICK_MS)
         store = rt.store
         try:
-            if store is not None and rt.wifi.connected() and store.due(_compat.ticks_ms()):
+            if store is None or not rt.wifi.connected():
+                continue
+            if store.auto_due(_compat.ticks_ms()):
+                # queue: never stop someone's music for an automatic update
+                store.begin_batch(queue=True, auto=True)
+                await store.run_batch()
+            elif store.due(_compat.ticks_ms()):
                 await store.refresh()
         except Exception as e:  # noqa: BLE001 - the store is optional
             _log.log(f"store: {_compat.error_text(e)}")
