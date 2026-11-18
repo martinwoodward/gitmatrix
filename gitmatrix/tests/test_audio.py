@@ -112,3 +112,49 @@ def test_plugin_config(root):
     assert got == {"speed": 9, "scale": 2.0, "show": False, "colour": (255, 128, 0), "label": "yo"}
     (d / "config.json").write_text("not json")
     assert plugin_config("demo", defaults) == defaults
+
+
+def test_bands_cover_60hz_to_16khz_weighted_to_midrange():
+    hz = _audio.BAND_HZ
+    assert len(hz) == _audio.BANDS + 1
+    assert round(hz[0]) == 60 and hz[-1] == 16000
+    assert all(lo < hi for lo, hi in zip(hz, hz[1:]))
+    mid = [i for i in range(_audio.BANDS) if hz[i] >= 250 and hz[i + 1] <= 4000]
+    assert len(mid) == 12 and hz[1] == 250
+    for rate in (44100, 48000):
+        edges = list(_audio._band_edges(rate))
+        assert all(hi - lo >= 1 for lo, hi in zip(edges, edges[1:]))
+        assert edges[0] * rate / 1024 < 70
+        assert abs(edges[-1] * rate / 1024 - 16000) < rate / 1024
+
+
+def tone(freq, rate=44100):
+    bins = [50] * 512
+    bins[int(freq * 1024 / rate + 0.5)] = 9000
+    return bins
+
+
+def test_tones_land_in_their_band(bt, clock):
+    for rate in (44100, 48000):
+        for freq, band in ((60, 0), (1100, 7), (15000, 15)):
+            bt.rate = rate
+            a = Audio(bt)
+            bt.streaming_now = True
+            feed(bt, clock, a, tone(freq, rate), 10)
+            spec = list(a.spectrum())
+            assert spec.index(max(spec)) == band, (rate, freq, spec)
+            lo, hi = a.band_range(band)
+            assert lo <= freq < hi and a.sample_rate() == rate
+
+
+def test_treble_bursts_clap_and_bass_kicks(bt, clock):
+    a = Audio(bt)
+    bt.streaming_now = True
+    quiet = [100] * 512
+    feed(bt, clock, a, quiet, 40)
+    a.kick(), a.clap()
+    feed(bt, clock, a, [100] * 70 + [9000] * 300, 1)  # broadband crack above 3 kHz
+    assert a.clap() and not a.kick()
+    feed(bt, clock, a, quiet, 20)
+    feed(bt, clock, a, tone(100), 1)
+    assert a.kick() and not a.clap()

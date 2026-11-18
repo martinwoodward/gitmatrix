@@ -16,8 +16,20 @@ except ImportError:
 
 BANDS = 16
 WAVE = 64
-FIRST_BIN = 2
-LAST_BIN = 240
+FFT_SIZE = 1024             # bt_audio publishes FFT_SIZE // 2 magnitude bins
+DEFAULT_RATE = 44100        # used until bt_audio reports the stream's sample rate
+# (low Hz, high Hz, bands): log-spaced within each region, weighted toward the
+# midrange where most of what we listen to lives. Sub-bass below 60 Hz and the
+# air above 16 kHz are left out.
+REGIONS = ((60, 250, 1), (250, 4000, 12), (4000, 16000, 3))
+KICK_BANDS = (0,)               # bass, 60-250 Hz
+CLAP_BANDS = (12, 13, 14, 15)   # ~3-16 kHz: snare/clap crack and hi-hat shimmer
+# An onset is a value above its slow envelope * RISE + FLOOR. The kick reads a
+# single band, which swings harder than an average, so it needs a higher floor.
+KICK_RISE = 1.5
+KICK_FLOOR = 0.12
+CLAP_RISE = 1.6
+CLAP_FLOOR = 0.08
 MIN_SCALE = 300
 GAIN_ATTACK = 0.2
 GAIN_DECAY = 0.997
@@ -30,14 +42,31 @@ NAME = "GitMatrix"
 KEYS_FILE = "/bt_link_keys.bin"
 
 
-def _band_edges():
-    edges = array("H", bytes((BANDS + 1) * 2))
+def _band_hz():
+    """The nominal BANDS + 1 band edges in Hz."""
+    edges = []
+    for lo, hi, n in REGIONS:
+        for i in range(n):
+            edges.append(lo * (hi / lo) ** (i / n))
+    edges.append(REGIONS[-1][1])
+    return edges
+
+
+BAND_HZ = _band_hz()
+
+
+def _band_edges(rate=DEFAULT_RATE, edges=None):
+    """FFT bin edges for each band at `rate`: band i covers bins
+    edges[i] <= b < edges[i + 1]. Every band gets at least one bin."""
+    if edges is None:
+        edges = array("H", bytes((BANDS + 1) * 2))
+    per_hz = FFT_SIZE / rate
+    top = FFT_SIZE // 2
     for i in range(BANDS + 1):
-        t = i / BANDS
-        edges[i] = FIRST_BIN + int((LAST_BIN - FIRST_BIN) * t * t)
-    for i in range(BANDS):
-        if edges[i + 1] <= edges[i]:
-            edges[i + 1] = edges[i] + 1
+        b = int(BAND_HZ[i] * per_hz + 0.5)
+        if i and b <= edges[i - 1]:
+            b = edges[i - 1] + 1
+        edges[i] = min(max(b, 1), top)
     return edges
 
 
@@ -50,7 +79,8 @@ class Audio:
         self._raw = array("f", bytes(BANDS * 4))
         self._bands = array("f", bytes(BANDS * 4))
         self._wave = array("f", bytes(WAVE * 4))
-        self._edges = _band_edges()
+        self._rate = DEFAULT_RATE
+        self._edges = _band_edges(self._rate)
         self._seq = -1
         self._scale = MIN_SCALE
         self._level = 0.0
@@ -95,6 +125,10 @@ class Audio:
         if seq == self._seq:
             return
         self._seq = seq
+        rate = self._call("sample_rate", default=0) or DEFAULT_RATE
+        if rate != self._rate:
+            self._rate = rate
+            _band_edges(rate, self._edges)
         if self._call("fft_into", self._bins, default=False):
             self._analyse(now)
 
@@ -147,12 +181,18 @@ class Audio:
         self._tone = (weighted / total / (BANDS - 1)) if total > 0.001 else 0.0
         self._flux = flux / BANDS
         self._intensity += (self._level - self._intensity) * 0.02
-        bass = (bands[0] + bands[1] + bands[2]) / 3
-        high = (bands[11] + bands[12] + bands[13] + bands[14] + bands[15]) / 5
+        bass = 0.0
+        for i in KICK_BANDS:
+            bass += bands[i]
+        bass /= len(KICK_BANDS)
+        high = 0.0
+        for i in CLAP_BANDS:
+            high += bands[i]
+        high /= len(CLAP_BANDS)
         self._bass = bass
 
         # Onsets: a jump well above the slow envelope, with a refractory period
-        if bass > self._bass_env * 1.5 + 0.08 and _compat.ticks_diff(now, self._last_kick) > KICK_REFRACTORY_MS:
+        if bass > self._bass_env * KICK_RISE + KICK_FLOOR and _compat.ticks_diff(now, self._last_kick) > KICK_REFRACTORY_MS:
             strength = min(1.0, max(0.01, bass - self._bass_env))
             self._hit_now(1, strength)
             self._hit_now(0, strength)
@@ -165,7 +205,7 @@ class Audio:
                     ordered = sorted(self._intervals)
                     self._bpm = 60000 / ordered[len(ordered) // 2]
             self._last_kick = now
-        if high > self._high_env * 1.6 + 0.08 and _compat.ticks_diff(now, self._last_clap) > CLAP_REFRACTORY_MS:
+        if high > self._high_env * CLAP_RISE + CLAP_FLOOR and _compat.ticks_diff(now, self._last_clap) > CLAP_REFRACTORY_MS:
             self._hit_now(2, min(1.0, max(0.01, high - self._high_env)))
             self._last_clap = now
         self._bass_env += (bass - self._bass_env) * 0.1
@@ -249,6 +289,14 @@ class Audio:
         """The raw 512 FFT bins (uint16), refreshed each new frame."""
         self._update()
         return self._bins
+
+    def sample_rate(self):
+        """The stream's sample rate in Hz; FFT bin b is centred on b * rate / 1024."""
+        return self._rate
+
+    def band_range(self, i):
+        """The nominal (low Hz, high Hz) covered by spectrum() band i."""
+        return BAND_HZ[i], BAND_HZ[i + 1]
 
     def streaming(self):
         self._update()
