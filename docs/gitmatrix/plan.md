@@ -201,21 +201,21 @@ Built in phase 5; full reference in [api.md](api.md), design as built in §8.
 One list to run on the widget; details are in the per-phase lists below (§5.1-5.5). Record results in [ondevice.md](ondevice.md).
 
 Integration / reboot-free (new):
-- [ ] Hang watch: a plugin with `while True: pass` in `update()` is stopped after ~5 s with "<name> hung and was stopped", quarantined (`!` in the menu), and the device keeps running with no reset. Same for `time.sleep(30)` in a hook and a hang in `on_show`/`process_config`.
-- [ ] `micropython.schedule(micropython.kbd_intr, None)` is accepted by the rp2 1.29 build (System → Logs shows "hang watch on" after boot, not "hang watch off").
+- [x] Hang watch: a plugin with `while True: pass` in `update()` is stopped after ~5 s with "<name> hung and was stopped", quarantined (`!` in the menu), and the device keeps running with no reset. Same for `time.sleep(30)` in a hook and a hang in `on_show`/`process_config`.
+- [x] `micropython.schedule(micropython.kbd_intr, None)` is accepted by the rp2 1.29 build (System → Logs shows "hang watch on" after boot, not "hang watch off").
 - [ ] A Ctrl-C from `mpremote` with nothing hung still reaches the REPL (the watch only consumes its own trips).
-- [ ] A viper/native busy loop (which the watch can't interrupt) meets the 8 s watchdog; note whether the chip hangs and needs the replug the docs describe.
-- [ ] WiFi page Save & join to a new network: joins in place with no reboot, `gitmatrix.local` answers, and the phew listening socket keeps serving after the STA/AP down-up cycle. Measure how long `active(False/True)` blocks inside housekeeping (watchdog stays fed).
-- [ ] Forget network (web) and the 10 s knob hold: the setup AP **GitMatrix** comes back in place, the message scrolls, the captive portal works, and joining from there works without a reboot. Holding the knob from power-on still means safe mode, not a WiFi reset.
-- [ ] Hostname change on the Settings page: the new name answers via mDNS after the in-place WiFi restart; the old one doesn't.
+- [ ] *(not run: a warm reset can hang the chip)* A viper/native busy loop (which the watch can't interrupt) meets the 8 s watchdog; note whether the chip hangs and needs the replug the docs describe.
+- [~] *(re-saving the same network rejoins in place in ~1 s and keeps serving; joining a different network not run)* WiFi page Save & join to a new network: joins in place with no reboot, `gitmatrix.local` answers, and the phew listening socket keeps serving after the STA/AP down-up cycle. Measure how long `active(False/True)` blocks inside housekeeping (watchdog stays fed).
+- [~] *(web Forget brings the AP back in place, seen from the Mac; knob hold, captive portal and joining from the AP not run)* Forget network (web) and the 10 s knob hold: the setup AP **GitMatrix** comes back in place, the message scrolls, the captive portal works, and joining from there works without a reboot. Holding the knob from power-on still means safe mode, not a WiFi reset.
+- [x] Hostname change on the Settings page: the new name answers via mDNS after the in-place WiFi restart; the old one doesn't.
 - [ ] Bluetooth menu shows `Status`, `Forget all`, `< Back` (no Pairable) and the web page has no pairable toggle on 1.29.
 - [ ] Plugin index refresh right after joining: if the first fetch times out, it succeeds ~10 s later (log), not after a minute.
-- [ ] Plugins whose name starts with a lower-case letter show capitalised titles (`_compat.cap_first`, no `str.capitalize` on 1.29).
-- [ ] Phase 4-7 modules import on the device with no `SyntaxError` (they compile with mpy-cross 1.29 on the host): send a notification, a PNG, a sound, an `/events` long-poll and an MQTT connect once each.
+- [x] Plugins whose name starts with a lower-case letter show capitalised titles (`_compat.cap_first`, no `str.capitalize` on 1.29).
+- [x] Phase 4-7 modules import on the device with no `SyntaxError` (they compile with mpy-cross 1.29 on the host): send a notification, a PNG, a sound, an `/events` long-poll and an MQTT connect once each.
 
 Carried over (not yet run):
 - [ ] Phase 2 (§5.1): captive portal on iOS/Android; fallback AP after a failed join; web rescan stall under A2DP; Timer feeding the watchdog inside `WLAN.scan()`; boot pre-scan list on first page load.
-- [ ] Phase 3 (§5.2): `bt_audio.deinit()` pause path keeps pairing/volume; install/settings/`/config` save while streaming (409, `pause_audio`, queued install); no flash writes during a 30-minute stream; power cut mid-install; flash staging for a large plugin.
+- [~] *(all done except the power cut and the flash stage)* Phase 3 (§5.2): `bt_audio.deinit()` pause path keeps pairing/volume; install/settings/`/config` save while streaming (409, `pause_audio`, queued install); no flash writes during a 30-minute stream; power cut mid-install; flash staging for a large plugin.
 - [ ] Phase 4 (§5.3): every item (sounds, I2S `drain()`, silent-while-streaming, high-priority interrupt + restart fallback, PNG rendering/scaling/memory, 413 limits, sound upload, button dismiss, quiet hours with NTP, forced plugins, URL prefetch, flash space).
 - [ ] Phase 5 (§5.4): every item (status fields, `/events` latency/limits/leaks, streaming with long-polls, `POST /sound` results, show with duration, Bluetooth/WiFi events, Developer section, token 401s).
 - [ ] Phase 6 (§5.5): every item (asyncio TLS streams, HA discovery and control, device triggers, LWT, broker restarts, bad password, settings changes, streaming, memory).
@@ -240,9 +240,9 @@ Carried over (not yet run):
 - [x] `fetch.AsyncFetch` with `CERT_NONE` reaches raw.githubusercontent.com; index refresh doesn't visibly stall the display or cause underruns.
 - [x] `os.rename` of a **directory** works between `/lib/plugins` and `/.install` on littlefs (the swap and the rollback both rely on it).
 - [x] `os.statvfs("/")` gives a sensible free figure (the free-space check and the Discover page).
-- [ ] *(audio tests pending)* `bt_audio.deinit()` exists; the pause path (`link_keys()` → `deinit()` → write → `load_link_keys()` → `init(name="GitMatrix")`) keeps the pairing, restores volume and pairable, and the phone/Mac can reconnect by hand. Check `load_link_keys(b"")` after Forget is accepted.
-- [ ] *(audio tests pending)* Install, settings save, `/config` save and Remove while streaming: 409 without `pause_audio`, no hang with it; a queued install runs once playback stops.
-- [ ] *(audio tests pending)* No flash write happens while streaming (state, config, link keys, index cache all wait): stream for 30+ minutes while changing brightness and switching plugins, then check they're saved after playback stops.
+- [x] `bt_audio.deinit()` exists; the pause path (`link_keys()` → `deinit()` → write → `load_link_keys()` → `init(name="GitMatrix")`) keeps the pairing, restores volume and pairable, and the phone/Mac can reconnect by hand. Check `load_link_keys(b"")` after Forget is accepted.
+- [x] Install, settings save, `/config` save and Remove while streaming: 409 without `pause_audio`, no hang with it; a queued install runs once playback stops.
+- [x] No flash write happens while streaming (state, config, link keys, index cache all wait): stream for 30+ minutes while changing brightness and switching plugins, then check they're saved after playback stops.
 - [ ] *(not run: replug budget)* Power cut mid-install (pull USB during "writing to flash") → boot reconcile restores the old version or removes a fresh one; `/.install` empty afterwards.
 - [~] *(the examples, a few KB each, install from the RAM stage; the flash stage isn't run)* Memory: a ~40 KB plugin installs from the RAM stage; a larger one stages on flash with the audio paused.
 - [x] Thumbnails (53×7 PNG) load in the browser straight from raw.githubusercontent.com.
@@ -250,34 +250,34 @@ Carried over (not yet run):
 - [x] The three example plugins from `martinwoodward/gitmatrix-plugins` install, run and keep their settings across an update.
 
 ### 5.3 Phase 4 on-device checklist (not yet run; host harness only)
-- [ ] Each built-in sound (`chime`, `ping`, `alert`, `success`, `error`, `doorbell`, `coin`) plays from the Sounds page on the left channel at the set volume, with no clicks at start/end; `amp_en` goes low afterwards.
+- [x] Each built-in sound (`chime`, `ping`, `alert`, `success`, `error`, `doorbell`, `coin`) plays from the Sounds page on the left channel at the set volume, with no clicks at start/end; `amp_en` goes low afterwards.
 - [ ] `asyncio.StreamWriter(i2s)` + `drain()` works on 1.29 (else switch `_sounds._writer` to an `i2s.irq` path); the display and web UI keep running during a 3 s sound.
-- [ ] While A2DP streams, a notification shows **silently** by default; the log says so and `/api/v1/sounds` `last_result` is `streaming`.
-- [ ] With "High priority sounds play over Bluetooth audio" on, a `priority: high` sound plays over the stream, A2DP comes back by itself (~2.5 s), no underruns are logged and nothing hangs. Repeat 10+ times before considering making it the default.
+- [x] While A2DP streams, a notification shows **silently** by default; the log says so and `/api/v1/sounds` `last_result` is `streaming`.
+- [x] *(18/18)* With "High priority sounds play over Bluetooth audio" on, a `priority: high` sound plays over the stream, A2DP comes back by itself (~2.5 s), no underruns are logged and nothing hangs. Repeat 10+ times before considering making it the default.
 - [ ] Fallback: set `_sounds.INTERRUPT_MODE = "restart"`; the sound plays after `deinit()`, the board re-inits as "GitMatrix" with its pairing, and the log says the source must reconnect.
 - [ ] Rendering on picovector: a 53×7 PNG is centred, a 200×7 PNG scrolls sideways, a 53×40 PNG scrolls up, a 400×64 PNG scales to 7 rows (the scaled `blit` looks right), a 7×7 icon + text keeps the icon fixed.
-- [ ] Memory: a 2048×64 PNG (≤ 32 KB file) decodes and scales without `MemoryError`; free RAM before/after.
-- [ ] `POST /api/v1/notify` with a 70 KB body gets 413 straight away (before the body is read); the 202 path for a normal body.
+- [x] Memory: a 2048×64 PNG (≤ 32 KB file) decodes and scales without `MemoryError`; free RAM before/after.
+- [x] `POST /api/v1/notify` with a 70 KB body gets 413 straight away (before the body is read); the 202 path for a normal body.
 - [ ] Upload a 256 KB WAV from the Sounds page (raw body over phew: RAM peak), play it, delete it; a 2nd upload past 2 MB total gets 413.
-- [ ] Upload while streaming: the sound shows "waiting for Bluetooth audio to stop" and is written once playback stops; no hang.
+- [x] Upload while streaming: the sound shows "waiting for Bluetooth audio to stop" and is written once playback stops; no hang.
 - [ ] Button: first press dismisses (and stops the sound), the second within 2 s opens the menu; with the menu open a high note waits and the top-right pixel blinks red; it shows after leaving the menu.
 - [ ] Quiet hours with the real (NTP) clock: a window across midnight on selected days silences sounds; "High priority notifications ring during quiet hours" lets high ones play. The Alerts menu toggles match the web page.
-- [ ] Forced plugin: `{"plugin": "<disabled plugin>", "data": {…}}` shows it with `on_notify(data)`, then the previous plugin, its rotation timer and payload come back.
+- [x] Forced plugin: `{"plugin": "<disabled plugin>", "data": {…}}` shows it with `on_notify(data)`, then the previous plugin, its rotation timer and payload come back.
 - [ ] `image_url`/`sound_url` over HTTPS (`CERT_NONE`) prefetch before showing, without stalling the display; a 404 URL drops the note with `last_error`.
 - [ ] Flash space: `/sounds` (~160 KB) fits alongside the plugins; `os.statvfs` afterwards.
 
 ### 5.4 Phase 5 on-device checklist (not yet run; host harness only)
-- [ ] `curl $GM/status`: every field filled in (`memory`, `flash` from `gc`/`os.statvfs`, `encoder`, `events`).
+- [x] `curl $GM/status`: every field filled in (`memory`, `flash` from `gc`/`os.statvfs`, `encoder`, `events`).
 - [ ] Knob turns, presses and long presses appear in `/events` while the menu and plugins still react to them as normal.
 - [ ] A waiting long-poll returns within ~50-100 ms of a knob turn; the frame rate doesn't change with 2 polls open.
-- [ ] A 3rd concurrent long-poll gets 429; a client that disconnects mid-poll frees its slot by its timeout, and phew doesn't log errors for the dead socket.
+- [x] A 3rd concurrent long-poll gets 429; a client that disconnects mid-poll frees its slot by its timeout, and phew doesn't log errors for the dead socket.
 - [ ] Bluetooth streaming with 2 long-polls open for 10 minutes: no extra underruns (`audio_pauses`), no stalls.
 - [ ] Other page loads and API calls stay responsive while 2 long-polls wait (phew serves each connection as its own task).
 - [ ] `POST /sound` across: alert sound off (`off`, `force` plays), quiet hours (`quiet`, `force` plays), streaming (`streaming`, `force` stays silent), high + interrupt (`interrupt`), a second sound while one plays (`busy`), a `sound_url`.
-- [ ] `POST /plugins/<name>/show` with `{"duration": 10, "data": {...}}` shows it, then the previous plugin comes back; without a body it stays.
+- [x] `POST /plugins/<name>/show` with `{"duration": 10, "data": {...}}` shows it, then the previous plugin comes back; without a body it stays.
 - [ ] Bluetooth connect/disconnect, start/stop music and WiFi drop/reconnect each give one event.
 - [ ] System page Developer section: Send and Watch work, Watch stops when leaving the page.
-- [ ] `gc.mem_free()` before and after 500 long-polls (no leak).
+- [x] `gc.mem_free()` before and after 500 long-polls (no leak).
 - [ ] With an API token set, every `/api/v1/*` route gives 401 without it; the pages still work.
 
 ### 5.5 Phase 6 on-device checklist (not yet run; host harness only)

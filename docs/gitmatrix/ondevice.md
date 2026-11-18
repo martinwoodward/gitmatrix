@@ -78,7 +78,7 @@ Conclusion: soft reset is reliable here. `gitmatrix.reboot()` now uses it (4ae00
 | Store | `/config?plugin=` `config.html` and `process_config` | PASS |
 | Store | Thumbnails from raw.githubusercontent.com | PASS: 53×7 PNGs |
 | Store | Power cut mid-install | not run (replug budget) |
-| Audio | "GitMatrix" A2DP sink, audio-reactive plugins, underruns, deinit/pause path, install-while-streaming, no flash writes while streaming | **pending**: held until the user gives the all clear for sound |
+| Audio | "GitMatrix" A2DP sink, audio-reactive plugins, underruns, deinit/pause path, install-while-streaming, no flash writes while streaming | PASS in round 2 (§5) |
 
 ## 3. Bugs found and fixed
 
@@ -95,10 +95,10 @@ Conclusion: soft reset is reliable here. `gitmatrix.reboot()` now uses it (4ae00
 
 ## 4. Open issues
 
-- ~~Hangs still use the watchdog.~~ Addressed on the integration branch (not yet run on the
-  device): a soft-timer hang watch interrupts a hook after 5 s and quarantines the plugin in
-  place. Only viper/native loops it can't interrupt still meet the 8 s watchdog (a warm reset,
-  which may need a replug).
+- ~~Hangs still use the watchdog.~~ The soft-timer hang watch now stops a hung hook after 5 s
+  and quarantines the plugin in place (verified on the device in round 2, §5). Only viper/native
+  loops it can't interrupt still meet the 8 s watchdog (a warm reset, which may need a replug).
+  That case was not run on purpose.
 - ~~`bt_audio.set_pairable` doesn't exist on 1.29: the pairable toggle is config-only.~~ The toggle
   is now hidden and the API answers 501 where it is missing.
 - Rejoining after a soft reset sometimes needs a second or third attempt (up to ~50 s). WiFi
@@ -107,5 +107,57 @@ Conclusion: soft reset is reliable here. `gitmatrix.reboot()` now uses it (4ae00
   after 10 s (twice) before backing off to a minute.
 - ~~Plugin settings silently ignore unknown keys.~~ Now 400.
 - The full list of what still needs running on the device is [plan.md §5.0](plan.md#50-consolidated-on-device-checklist-everything-not-yet-verified-on-hardware).
-- Still to run: audio checks, menu/encoder by hand, safe mode with the knob held, fallback AP,
-  captive portal on phones, power cut mid-install, 30-minute streaming soak.
+- Still to run: menu/encoder by hand, safe mode with the knob held, the 10 s knob WiFi reset,
+  button dismiss / second-press menu, fallback AP, captive portal on phones, power cut
+  mid-install, the `INTERRUPT_MODE = "restart"` fallback, Home Assistant, a 1-hour soak.
+- The spectrum plugin's bands cover ~86 Hz–10 kHz with even spacing. The user wants them
+  focused on 60 Hz–16 kHz: one bass band (60–250 Hz), most bands in the midrange
+  (250 Hz–4 kHz) and a few for 4–16 kHz. Kick detection would then need reworking. Being done
+  separately.
+- A steady tone or a sustained chord makes the spectrum look frozen (the bars hold still).
+  That's expected rather than a stall: a frequency sweep moves the bars normally.
+
+## 5. Round 2: integration build (reboot-free, phases 4–7)
+
+The integration branch was deployed with `deploy.py`. Audio was kept quiet: device volume 15
+and the Mac's source at 0.15. The Mac streamed A2DP straight to the "GitMatrix" output without
+changing its default output.
+
+| Area | Check | Result |
+|---|---|---|
+| Boot | Phase 4–7 modules import on 1.29; `/status` fields all filled in | PASS |
+| Hang watch | `micropython.schedule(kbd_intr)` accepted ("hang watch on" in the log) | PASS |
+| Hang watch | Busy loop in `update`, `time.sleep(30)` in `update`, a hang in `on_show`, `on_notify`, `on_settings` and `process_config` | PASS: each is stopped after 5 s, "…hung and was stopped" scrolls, the plugin is quarantined, the rotation continues and there's no reset. `/config` save answers 400 "hung in process_config" |
+| Hang watch | Viper busy loop meets the 8 s watchdog | not run (a warm reset can hang the chip) |
+| Sounds | All 7 built-ins play | PASS after the fix (all failed with `NameError: ptr16`) |
+| Sounds | Upload, play, delete a custom WAV; delete while it plays | PASS after the fix (deleting the playing sound hung the chip and cost a replug) |
+| Sounds | Upload while streaming → queued, written after playback stops | PASS |
+| Sounds | `POST /sound` results: `off`, `quiet`, `streaming`, `interrupt`, `busy`, `force` | PASS |
+| Bluetooth | Mac connects to "GitMatrix", streams; spectrum reacts | PASS (`underruns` now in `GET /bluetooth`) |
+| Bluetooth | Notification while streaming: silent by default (`last_result` `streaming`) | PASS |
+| Bluetooth | High priority with "play over Bluetooth audio" on | PASS, 18/18: the sound plays, the stream comes back by itself, 0 underruns |
+| Bluetooth | Remove/install/settings while streaming: 409 without `pause_audio`; `queue: true` install downloads, then writes once playback stops | PASS |
+| Bluetooth | `pause_audio: true`: sink dropped, write ~0.3 s, back on, Mac reconnects with `blueutil --connect`; volume kept | PASS |
+| Bluetooth | 30-minute soak while changing brightness, plugins, alerts, token, quiet hours and MQTT settings | PASS: 31 min, 0 underruns, 0 pauses, free RAM flat (~7.7 MB). Changes were saved after playback stopped and survived a restart |
+| Notifications | PNGs: 20×5 centred, 200×7 scrolls sideways, 53×30 scrolls up, 300×60 scaled, 7×7 icon + text, 2048×64 with no RAM change, 2049 wide → clean error | PASS (camera) |
+| Notifications | 70 KB body → 413; failed `image_url` (404, server down) drops the note with `last_error` | PASS |
+| Notifications | Forced plugin show with `duration` and `data`, then back to the rotation; duration 61 → 400 | PASS |
+| Notifications | Quiet hours around the current time: normal is quiet, `force` and outside the window are not; high is quiet with the bypass off | PASS |
+| REST | `/events` long-polls: 3rd concurrent → 429, other requests still served; 500 polls with no leak | PASS |
+| REST | Token: 401 without/wrong, 200 right; HttpOnly SameSite=Strict cookie; clearing works | PASS |
+| REST | All 9 pages 200; titles capitalised | PASS |
+| MQTT | Local mosquitto: HA discovery and retained state, every command and its result, wrong password backoff, retained `plugin/set` ignored on reconnect, base topic change, disable | PASS |
+| MQTT | Home Assistant itself | not run |
+| WiFi | Re-save the same network with a new hostname: rejoins in place in ~1 s; new name answers, old one gone once the Mac's cache expires; reverted | PASS |
+| WiFi | Forget: setup AP "GitMatrix" back in place (seen from the Mac); credentials restored over USB and rejoined | PASS |
+| Menu | Encoder, menu, knob holds, button dismiss | waiting for a person at the knob |
+
+Bugs fixed in round 2:
+
+| Commit | Bug |
+|---|---|
+| 364cd82 | `viper = micropython.viper` then `@viper` compiles as plain Python on 1.29, so every sound failed with `NameError: ptr16`. Uses the literal decorator; syntax guard added |
+| d485d1c | `GET /bluetooth` didn't report underruns |
+| 7b1573b | The shipped default volume was too loud; now 25% (was 50%) |
+| 9626514 | Deleting a custom sound while it played removed the file under `play()` and hung the chip. Now 409 |
+| 4637aa4 | `/config` ran `process_config` (and the plugin import) outside the hang watch, so a hang there would trip the watchdog |
