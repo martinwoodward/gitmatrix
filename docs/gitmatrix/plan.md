@@ -220,7 +220,7 @@ Carried over (not yet run):
 - [ ] Phase 5 (§5.4): every item (status fields, `/events` latency/limits/leaks, streaming with long-polls, `POST /sound` results, show with duration, Bluetooth/WiFi events, Developer section, token 401s).
 - [ ] Phase 6 (§5.5): every item (asyncio TLS streams, HA discovery and control, device triggers, LWT, broker restarts, bad password, settings changes, streaming, memory).
 - [ ] Phase 7: an Art Matrix `config.html` with `data-autosave` saves on change and "Reset to defaults" works on the device.
-- [ ] General: menu and encoder by hand (snappy animation, Brightness/Volume live bars), safe mode with the knob held, 1-hour streaming soak logging underruns.
+- [~] *(menu, encoder and safe mode pass by hand; the soak ran 30 min, not 1 hour)* General: menu and encoder by hand (snappy animation, Brightness/Volume live bars), safe mode with the knob held, 1-hour streaming soak logging underruns.
 
 ### 5.1 Phase 2 on-device checklist (run on device; results in `ondevice.md`)
 - [x] `network.WLAN.SEC_WPA2` exists on 1.29 and the setup AP really is WPA2 with `monalisa`.
@@ -260,7 +260,7 @@ Carried over (not yet run):
 - [x] `POST /api/v1/notify` with a 70 KB body gets 413 straight away (before the body is read); the 202 path for a normal body.
 - [ ] Upload a 256 KB WAV from the Sounds page (raw body over phew: RAM peak), play it, delete it; a 2nd upload past 2 MB total gets 413.
 - [x] Upload while streaming: the sound shows "waiting for Bluetooth audio to stop" and is written once playback stops; no hang.
-- [ ] Button: first press dismisses (and stops the sound), the second within 2 s opens the menu; with the menu open a high note waits and the top-right pixel blinks red; it shows after leaving the menu.
+- [x] Button: first press dismisses (and stops the sound), the second within 2 s opens the menu; with the menu open a high note waits and the top-right pixel blinks red; it shows after leaving the menu.
 - [ ] Quiet hours with the real (NTP) clock: a window across midnight on selected days silences sounds; "High priority notifications ring during quiet hours" lets high ones play. The Alerts menu toggles match the web page.
 - [x] Forced plugin: `{"plugin": "<disabled plugin>", "data": {…}}` shows it with `on_notify(data)`, then the previous plugin, its rotation timer and payload come back.
 - [ ] `image_url`/`sound_url` over HTTPS (`CERT_NONE`) prefetch before showing, without stalling the display; a 404 URL drops the note with `last_error`.
@@ -268,7 +268,7 @@ Carried over (not yet run):
 
 ### 5.4 Phase 5 on-device checklist (not yet run; host harness only)
 - [x] `curl $GM/status`: every field filled in (`memory`, `flash` from `gc`/`os.statvfs`, `encoder`, `events`).
-- [ ] Knob turns, presses and long presses appear in `/events` while the menu and plugins still react to them as normal.
+- [x] Knob turns, presses and long presses appear in `/events` while the menu and plugins still react to them as normal.
 - [ ] A waiting long-poll returns within ~50-100 ms of a knob turn; the frame rate doesn't change with 2 polls open.
 - [x] A 3rd concurrent long-poll gets 429; a client that disconnects mid-poll frees its slot by its timeout, and phew doesn't log errors for the dead socket.
 - [ ] Bluetooth streaming with 2 long-polls open for 10 minutes: no extra underruns (`audio_pauses`), no stalls.

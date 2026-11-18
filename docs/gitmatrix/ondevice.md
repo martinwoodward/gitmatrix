@@ -197,3 +197,38 @@ Findings:
     output while streaming.
 - `POST /plugins/<n>/show` on the plugin already on screen didn't restart its dwell, so the
   rotation could switch away at once. Fixed in dbd138c.
+
+## 7. Knob tests by hand, and jerky scrolling
+
+The user ran the knob script; the API and serial log were watched.
+
+| Check | Result |
+|---|---|
+| Direction / detent | PASS: one event per click, + clockwise |
+| Menu: snappy slide, Brightness/Volume live bars | PASS after 43621b2. The slide was slower than stock: the stock code advances by `0.01*SNAP_SPEED*value`, so extra clicks hurry it. Ours didn't |
+| First press dismisses a note, a second within 2 s opens the menu | PASS |
+| High note while the menu is open | PASS: the top-right pixel blinks red, and the note shows after the menu closes |
+| 10 s hold: WiFi reset | PASS: `long_press` then `wifi_reset`. The device left the LAN with the AP up. Creds restored over USB afterwards |
+| Power-on hold: safe mode | PASS: safe-mode message, `safe_mode: "button held"`, WiFi up. `POST plugins/<n>/show` leaves it in place (no reboot) |
+
+A soft reboot straight after a deploy hung once (USB and WiFi gone). The user's replug,
+done while holding the knob, doubled as the safe-mode test.
+
+**Jerky scrolling** (reported by the user). Measured with a frame-probe plugin:
+
+- `gc.mem_free()` and `gc.mem_alloc()` take **~100 ms each**, because they walk the 8 MB
+  PSRAM heap. `gc.collect()` takes about 0.5 ms. `os.statvfs` takes ~23 ms.
+- Flash reads: a `package.json` is ~5 ms, a `stat` miss ~3 ms.
+- `/status` (memory + statvfs) and `/plugins` (two manifest passes, plus `active.json` and
+  `exists` per plugin) each froze the display for **~270 ms**. The web UI polls `/plugins`
+  every 5 s, so with a browser tab open the scroll jumped every 5 s.
+  - Fixed in 654b10e: `/plugins` now takes ~27 ms, and `/status` ~24 ms with one heap walk a
+    minute.
+  - `/settings` GET takes ~150 ms (time-zone list) but isn't polled.
+- With no stalls, the frames still came 16–23 ms apart against a 40 ms/px scroll, so each
+  pixel dwelt an uneven 2 or 3 frames.
+  - Fixed in be0f259: a 16 ms deadline frame grid (~62 fps, up from ~58), and whole-frame
+    ms-per-pixel for every scroller.
+  - The bitmap fonts can't render sub-pixel positions, so whole-pixel steps are the only
+    option.
+  - The user confirmed notifications now scroll smoothly.
