@@ -394,6 +394,101 @@ def test_remove_while_streaming_pauses_only_when_asked(store, bt):
     assert not live(store, "demo").exists() and bt.deinits == 1
 
 
+# ---- update checks and automatic updates ------------------------------------------
+
+@pytest.fixture
+def wall(monkeypatch):
+    class Wall:
+        now = 1_800_000_000
+
+    monkeypatch.setattr(_store, "wall_clock", lambda: Wall.now)
+    return Wall
+
+
+def batch(rig, **kw):
+    rig.store.begin_batch(**kw)
+    run(rig.store.run_batch())
+    return rig.store.batch
+
+
+def test_update_all_updates_each_plugin_and_reports_failures(store, wall):
+    for name in ("one", "two", "three"):
+        store.remote.publish(name, {"__init__.py": GOOD})
+    run(store.store.refresh())
+    for name in ("one", "two", "three"):
+        install(store, name)
+    store.remote.publish("one", {"__init__.py": GOOD + "V = 2\n"}, version="2.0.0")
+    store.remote.publish("two", {"__init__.py": "def update(:\n"}, version="2.0.0")
+    b = batch(store, check=True, apply=False)
+    assert b["finished"] and b["error"] is None and b["plugins"] == ["one", "two"]
+    assert [u["name"] for u in store.store.updates()] == ["one", "two"]
+    assert store.store.updates()[0] == {"name": "one", "title": "One", "installed": "1.0.0", "available": "2.0.0"}
+    assert _store.active()["one"]["version"] == "1.0.0"          # check only: nothing changed
+    assert store.rt.config.get("auto_update_checked") == wall.now
+
+    b = batch(store, check=False)
+    assert b["updated"] == ["one"] and "previous version was restored" in b["failed"]["two"]
+    assert _store.active()["one"]["version"] == "2.0.0" and _store.active()["two"]["version"] == "1.0.0"
+    assert _store.active()["three"]["version"] == "1.0.0"
+
+
+def test_check_failure_is_reported_and_auto_retries_later(store, wall):
+    store.rt.config.set("auto_update", True)
+    b = batch(store, auto=True)
+    assert b["state"] == "failed" and "404" in b["error"]
+    assert store.rt.config.get("auto_update_checked") is None
+    assert not store.store.auto_due(store.clock.advance(_store.AUTO_RETRY_MS - 1))
+    assert store.store.auto_due(store.clock.advance(1))
+
+
+def test_auto_update_runs_on_its_interval(store, wall):
+    store.remote.publish("demo", {"__init__.py": GOOD})
+    run(store.store.refresh())
+    install(store, "demo")
+    cfg = store.rt.config
+    assert not store.store.auto_due()                            # off by default
+    cfg.set("auto_update", True)
+    assert store.store.auto_due()                                # never checked
+    store.remote.publish("demo", {"__init__.py": GOOD + "V = 2\n"}, version="2.0.0")
+    b = batch(store, queue=True, auto=True)
+    assert b["updated"] == ["demo"] and _store.active()["demo"]["version"] == "2.0.0"
+    assert not store.store.auto_due()
+    wall.now += 7 * 86400 - 1
+    assert not store.store.auto_due()
+    wall.now += 1
+    assert store.store.auto_due()
+    cfg.set("auto_update_days", 30)
+    assert not store.store.auto_due()
+    cfg.set("auto_update_checked", wall.now + 100)               # clock went backwards
+    assert store.store.auto_due()
+    wall.now = None                                              # no NTP yet
+    assert store.store.updates_status()["clock_set"] is False
+    assert not store.store.auto_due()
+
+
+def test_auto_update_waits_for_playback_instead_of_stopping_it(store, bt, wall, monkeypatch):
+    store.remote.publish("demo", {"__init__.py": GOOD})
+    run(store.store.refresh())
+    install(store, "demo")
+    store.remote.publish("demo", {"__init__.py": GOOD + "V = 2\n"}, version="2.0.0")
+    monkeypatch.setattr(_store, "QUEUE_POLL_MS", 0)
+    bt.streaming_now = True
+    store.store.begin_batch(queue=True, auto=True)
+
+    async def go():
+        task = asyncio.create_task(store.store.run_batch())
+        for _ in range(50):
+            await asyncio.sleep(0)
+        assert store.store.progress["state"] == "queued"
+        with pytest.raises(_store.StoreError):
+            store.store.begin("demo")                            # the batch owns the store
+        bt.streaming_now = False
+        await task
+
+    run(go())
+    assert store.store.batch["updated"] == ["demo"] and bt.deinits == 0
+
+
 # ---- the API -------------------------------------------------------------------
 
 SCHEMA = [
@@ -460,6 +555,36 @@ def test_store_refresh_api(web):
     assert call("POST", "/api/v1/store/refresh").status == 202
     run(web.spawned.pop())
     assert call("POST", "/api/v1/store/refresh").status == 429
+
+
+def test_store_updates_api(web, bt, wall):
+    web.remote.publish("demo", {"__init__.py": GOOD})
+    run(web.store.refresh())
+    install(web, "demo")
+    s = call("GET", "/api/v1/store/updates").json
+    assert s["available"] == [] and s["auto_update"] is False and s["auto_update_days"] == 7
+    assert call("POST", "/api/v1/store/updates", {"auto_update_days": 0}).status == 400
+    s = call("POST", "/api/v1/store/updates", {"auto_update": True, "auto_update_days": 14}).json
+    assert s["auto_update"] and s["auto_update_days"] == 14 and s["next_check_in_s"] == 0
+    assert "auto_update_days = 14" in (web.root / "config.py").read_text()
+
+    web.remote.publish("demo", {"__init__.py": GOOD + "V = 2\n"}, version="2.0.0")
+    r = call("POST", "/api/v1/store/updates/check")
+    assert r.status == 202 and r.json["batch"]["state"] == "checking"
+    assert call("POST", "/api/v1/store/install", {"name": "demo"}).status == 409
+    run(web.spawned.pop())
+    s = call("GET", "/api/v1/store").json["updates"]
+    assert [u["name"] for u in s["available"]] == ["demo"] and s["last_check_ago_s"] == 0
+    assert s["next_check_in_s"] == 14 * 86400
+
+    bt.streaming_now = True
+    r = call("POST", "/api/v1/store/updates/apply")
+    assert r.status == 409 and r.json["audio_streaming"]
+    bt.streaming_now = False
+    assert call("POST", "/api/v1/store/updates/apply").status == 202
+    run(web.spawned.pop())
+    assert call("GET", "/api/v1/store/updates").json["available"] == []
+    assert _store.active()["demo"]["version"] == "2.0.0"
 
 
 def test_settings_api_never_returns_secrets(web, bt):

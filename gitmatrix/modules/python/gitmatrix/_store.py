@@ -18,6 +18,10 @@
 #      /.install/<name>.old, rename the staged copy into place, carry over files
 #      the plugin made itself, atomically rewrite /lib/plugins/active.json
 #   5. import it; if an update fails to import, roll back to the old copy
+# Updates: a plugin has one when the index hash differs from active.json's.
+# begin_batch()/run_batch() check (refetch the index) and/or update everything,
+# one install at a time; with auto_update on, the boot store task does that every
+# auto_update_days (wall clock from NTP), queued behind Bluetooth audio.
 # reconcile() runs at boot before anything is loaded and finishes or undoes a
 # commit cut off by a power cut, then sweeps /.install.
 #
@@ -53,6 +57,9 @@ SPACE_MARGIN = 32 * 1024          # left free after an install
 HASH_LENGTH = 12
 QUEUE_POLL_MS = 1000              # how often a queued install checks playback
 AUDIO_WARNING = _flash.AUDIO_WARNING
+DEFAULT_UPDATE_DAYS = 7           # auto_update_days when unset or unusable
+MAX_UPDATE_DAYS = 90
+AUTO_RETRY_MS = 60 * 60 * 1000    # after a failed automatic check
 
 
 class StoreError(Exception):
@@ -150,6 +157,24 @@ def compatible(min_firmware):
     import gitmatrix
 
     return version_tuple(gitmatrix.VERSION) >= version_tuple(min_firmware)
+
+
+def wall_clock():
+    """Seconds since the epoch once NTP has set the clock, else None. Tests replace it."""
+    from gitmatrix import _ntp
+
+    if not _ntp.synced:
+        return None
+    import time
+
+    return int(time.time())
+
+
+def update_days(value):
+    """auto_update_days as a whole number of days, 1..MAX_UPDATE_DAYS."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not 1 <= value <= MAX_UPDATE_DAYS:
+        return DEFAULT_UPDATE_DAYS
+    return int(value)
 
 
 def free_bytes():
@@ -415,6 +440,8 @@ class Store:
         self.progress = None       # install/update progress for the UI
         self.pending_cache = None  # index to write once Bluetooth audio stops
         self.feed = lambda: None   # the watchdog, during long flash writes
+        self.batch = None          # check-for-updates / update-all progress for the UI
+        self.auto_retry_at = None  # ticks: a failed automatic check waits until then
         _runtime.store = self
         self.load_cache()
 
@@ -433,7 +460,7 @@ class Store:
         return True
 
     def due(self, now):
-        if self.refreshing or self.busy():
+        if self.refreshing or self.busy() or self.batch_running():
             return False
         if self.checked_at is None:
             return True
@@ -524,19 +551,148 @@ class Store:
             "online": bool(wifi is not None and wifi.connected()),
             "install": self.progress,
             "free": free_bytes(),
+            "updates": self.updates_status(installed),
         }
+
+    # -- updates --
+
+    def updates(self, installed=None):
+        """Store-installed plugins whose index entry has a different hash."""
+        installed = active() if installed is None else installed
+        out = []
+        for name in sorted(installed):
+            if self.update_available(name, installed):
+                e = self.entry(name)
+                out.append({"name": name, "title": e["title"],
+                            "installed": installed[name].get("version") or "",
+                            "available": e["version"]})
+        return out
+
+    def batch_running(self):
+        return self.batch is not None and not self.batch["finished"]
+
+    def updates_status(self, installed=None):
+        cfg = _runtime.config
+        cfg = cfg.values if cfg is not None else {}
+        last = cfg.get("auto_update_checked")
+        last = last if isinstance(last, (int, float)) and not isinstance(last, bool) else None
+        days = update_days(cfg.get("auto_update_days"))
+        now = wall_clock()
+        auto = bool(cfg.get("auto_update"))
+        next_in = None
+        if auto and now is not None:
+            next_in = 0 if last is None or last > now else max(0, int(last + days * 86400 - now))
+        return {
+            "available": self.updates(installed),
+            "auto_update": auto,
+            "auto_update_days": days,
+            "last_check_ago_s": now - last if now is not None and last is not None and last <= now else None,
+            "next_check_in_s": next_in,
+            "clock_set": now is not None,
+            "batch": self.batch,
+        }
+
+    def auto_due(self, now_ticks=None):
+        """The automatic check (and update) is on and its interval has passed.
+        Needs the wall clock (NTP): the interval spans reboots."""
+        cfg = _runtime.config
+        if cfg is None or not cfg.get("auto_update") or self.refreshing or self.busy() or self.batch_running():
+            return False
+        now_ticks = _compat.ticks_ms() if now_ticks is None else now_ticks
+        if self.auto_retry_at is not None and _compat.ticks_diff(now_ticks, self.auto_retry_at) < 0:
+            return False
+        now = wall_clock()
+        if now is None:
+            return False
+        last = cfg.get("auto_update_checked")
+        if not isinstance(last, (int, float)) or isinstance(last, bool) or last > now:
+            return True
+        return now - last >= update_days(cfg.get("auto_update_days")) * 86400
+
+    def begin_batch(self, check=True, apply=True, pause_audio=False, queue=False, auto=False):
+        """Set up a check for updates (check: refetch the index first) and/or
+        update everything that has one (apply); raises StoreError. Run it with
+        run_batch(). Updating while Bluetooth audio streams needs pause_audio or queue."""
+        if apply and _flash.streaming() and not (pause_audio or queue):
+            raise StoreError(409, AUDIO_WARNING)
+        if self.busy() or self.batch_running():
+            raise StoreError(409, "an install is running")
+        self.batch = {
+            "auto": bool(auto),
+            "check": bool(check),
+            "apply": bool(apply),
+            "state": "checking" if check else "updating",
+            "plugins": [],
+            "updated": [],
+            "failed": {},
+            "error": None,
+            "finished": False,
+            "pause_audio": bool(pause_audio),
+            "queue": bool(queue),
+        }
+        return self.batch
+
+    async def run_batch(self):
+        """Refresh the index (if begun with check) then, with apply, update every
+        plugin that has an update, one at a time. Never raises."""
+        batch = self.batch
+        try:
+            if batch["check"]:
+                waited = self.refreshing    # a refresh already under way will do
+                while self.refreshing:
+                    await _sleep_ms(100)
+                if not waited or self.error:
+                    await self.refresh()
+                if self.error:
+                    batch["error"] = f"couldn't fetch the plugin list ({self.error})"
+                    return
+                wall = wall_clock()
+                cfg = _runtime.config
+                if wall is not None and cfg is not None:
+                    cfg.set("auto_update_checked", wall)
+            names = [u["name"] for u in self.updates()]
+            batch["plugins"] = names
+            if not batch["apply"] or not names:
+                return
+            batch["state"] = "updating"
+            for name in names:
+                if not self.update_available(name):
+                    continue
+                try:
+                    self.begin(name, pause_audio=batch["pause_audio"], queue=batch["queue"], _batch=True)
+                except StoreError as e:
+                    batch["failed"][name] = str(e)
+                    continue
+                await self.install(name)
+                if self.progress["error"]:
+                    batch["failed"][name] = self.progress["error"]
+                else:
+                    batch["updated"].append(name)
+            if batch["updated"]:
+                _log.log(f"store: updated {', '.join(batch['updated'])}" + (" (automatic)" if batch["auto"] else ""))
+        except Exception as e:  # noqa: BLE001 - report it; the store carries on
+            batch["error"] = _compat.error_text(e)
+        finally:
+            if batch["error"]:
+                _log.log(f"store: update check failed: {batch['error']}")
+                if batch["auto"]:
+                    self.auto_retry_at = _compat.ticks_add(_compat.ticks_ms(), AUTO_RETRY_MS)
+            elif batch["auto"]:
+                self.auto_retry_at = None
+            batch["state"] = "failed" if batch["error"] else "done"
+            batch["finished"] = True
 
     # -- install / update --
 
     def busy(self):
         return self.progress is not None and not self.progress["finished"]
 
-    def begin(self, name, pause_audio=False, queue=False):
+    def begin(self, name, pause_audio=False, queue=False, _batch=False):
         """Validate an install request and set up its progress; raises StoreError.
         While Bluetooth audio streams it needs pause_audio or queue (409 without)."""
         if _flash.streaming() and not (pause_audio or queue):
             raise StoreError(409, AUDIO_WARNING)
-        if self.busy():
+        if self.busy() or (self.batch_running() and not _batch):
             raise StoreError(409, "another install is running")
         entry = self.entry(name)
         if entry is None:

@@ -290,7 +290,18 @@ curl -s -H "$AUTH" -H 'Content-Type: audio/wav' --data-binary @bell.wav $GM/soun
 | `POST store/refresh` | refetch the index (202; 429 + `retry_ms` if too soon; 409 offline) |
 | `POST store/install` | `{name, pause_audio?, queue?}` installs or updates. Answers `202 {"install": progress}`, or 409 `audio_streaming` |
 | `GET store/install` | `{"install": progress}` for the install in progress |
+| `GET store/updates` | updates for store-installed plugins (`available: [{name, title, installed, available}]`), `auto_update`, `auto_update_days`, `last_check_ago_s`, `next_check_in_s`, `clock_set`, and `batch` (the last check/update-all run). Also in `GET store` as `updates` |
+| `POST store/updates` | `{auto_update?, auto_update_days? (1-90)}` turns the automatic check on or off and sets its interval (default every 7 days) |
+| `POST store/updates/check` | `{apply?, pause_audio?, queue?}` refetches the index (202 `{batch}`; 409 offline); with `apply` it then installs every update |
+| `POST store/updates/apply` | `{pause_audio?, queue?}` installs every update the current index offers, one at a time (202 `{batch}`, or 409 `audio_streaming`) |
 | `POST plugins/{name}/remove` | `{keep_data: true, pause_audio?}` |
+
+An update is available when the index's package hash differs from the one recorded at install
+(`/lib/plugins/active.json`). With `auto_update` on, GitMatrix checks every `auto_update_days`
+once its clock is set from NTP (the interval spans reboots: the last check time is saved as
+`auto_update_checked` in `/config.py`) and installs every update. Automatic updates never stop
+Bluetooth audio: they wait until playback stops. A failed check is retried an hour later. A
+broken update rolls back as usual and is reported in `batch.failed`.
 
 ## MQTT and Home Assistant
 

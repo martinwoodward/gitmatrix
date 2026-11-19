@@ -25,6 +25,12 @@
   <div class="actions"><button class="primary" id="save">Save</button></div>
 </section>
 <section>
+  <h2>Plugin updates</h2>
+  <div class="row"><span id="updates-text" class="muted grow"></span><button id="check">Check now</button><button class="primary hidden" id="update-all">Update all</button></div>
+  <label><input type="checkbox" id="auto"> Install updates automatically every
+    <select id="auto-days" style="width:auto"><option value="1">day</option><option value="7">week</option><option value="14">2 weeks</option><option value="30">30 days</option></select></label>
+</section>
+<section>
   <h2>API token</h2>
   <p class="muted">Optional. When set, scripts and Home Assistant must send <span class="mono">Authorization: Bearer &lt;token&gt;</span> to <span class="mono">/api/v1</span>. These pages keep working.</p>
   <p id="token-state" class="muted"></p>
@@ -108,6 +114,49 @@ $("#mqtt-clear-password").onclick = async () => {
   const m = await attempt(() => api("/mqtt", { password: "" }), "Password cleared");
   if (m) renderMqtt(m);
 };
+let updates = null, online = false, upPoll = null;
+function renderUpdates(d) {
+  if (d) { updates = d.updates; online = d.online; }
+  const u = updates, b = u.batch, n = u.available.length;
+  const running = b && !b.finished;
+  let text = running ? (b.state === "checking" ? "Checking…" : "Updating " + b.plugins.length + " plugin(s)…")
+    : n ? "Updates: " + u.available.map((p) => `${p.title} ${p.installed ? "v" + p.installed : ""} → ${p.available ? "v" + p.available : "new"}`).join(", ")
+    : "Up to date";
+  if (!running && u.last_check_ago_s != null) text += " · checked " + (u.last_check_ago_s < 60 ? "just now" : fmtAge(u.last_check_ago_s * 1000) + " ago");
+  if (!running && b && b.error) text += " · last check failed: " + b.error;
+  else if (!running && b && Object.keys(b.failed).length) text += " · not updated: " + Object.keys(b.failed).join(", ");
+  $("#updates-text").textContent = text;
+  $("#check").disabled = running || !online;
+  const all = $("#update-all");
+  all.classList.toggle("hidden", !n);
+  all.disabled = running || !online;
+  all.textContent = `Update all (${n})`;
+  if (document.activeElement !== $("#auto")) $("#auto").checked = u.auto_update;
+  const sel = $("#auto-days");
+  if (document.activeElement !== sel) {
+    if (![...sel.options].some((o) => Number(o.value) === u.auto_update_days)) sel.append(el("option", { value: u.auto_update_days }, u.auto_update_days + " days"));
+    sel.value = String(u.auto_update_days);
+  }
+  if (running && !upPoll) upPoll = setInterval(loadUpdates, 1000);
+  if (!running && upPoll) { clearInterval(upPoll); upPoll = null; }
+}
+function loadUpdates() { return api("/store").then(renderUpdates).catch(() => {}); }
+async function updateBatch(path) {
+  const r = await attempt(() => withAudio(path, {}, true));
+  if (!r) return;
+  if (r.warning) toast(r.warning);
+  updates.batch = r.batch;
+  renderUpdates();
+}
+async function saveAuto() {
+  const u = await attempt(() => api("/store/updates", { auto_update: $("#auto").checked, auto_update_days: Number($("#auto-days").value) }), "Saved");
+  if (u) { updates = u; renderUpdates(); }
+}
+$("#check").onclick = () => updateBatch("/store/updates/check");
+$("#update-all").onclick = () => updateBatch("/store/updates/apply");
+$("#auto").onchange = saveAuto;
+$("#auto-days").onchange = saveAuto;
+loadUpdates();
 attempt(() => api("/settings")).then((s) => s && render(s));
 attempt(() => api("/mqtt")).then((m) => m && renderMqtt(m));
 setInterval(() => api("/mqtt").then((m) => { $("#mqtt-state").textContent = mqttState(m.status); }).catch(() => {}), 5000);
