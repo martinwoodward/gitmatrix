@@ -14,8 +14,13 @@ plugin across, follow the [porting guide](porting.md); to start a new one, copy 
     __init__.py      # the plugin module
     package.json     # manifest (optional but recommended; required in the store)
     config.html      # optional Art Matrix-style settings page
-    thumbnail.png    # 53x7 preview for the Discover page (store only)
+    thumbnail.png    # 53x7 still for the Discover page (store only)
+    preview/         # optional recording setup for the store's animated preview (store only)
 ```
+
+In the plugins repo, CI also records `preview.gif`, an animated preview that Discover
+shows in place of `thumbnail.png` (see [Store previews](#store-previews)). Neither the
+thumbnail nor the preview is installed on the device.
 
 Data a plugin saves lives outside its folder, so it survives updates:
 `/data/<name>/` (state, settings, `config.json`) and `/secrets/<name>.json` (secret settings).
@@ -120,6 +125,43 @@ As on Art Matrix, a `<form data-autosave>` saves on every change (no Save button
 and plugins without `process_config` get a "Reset to defaults" button under the form.
 GitMatrix's autosave waits for changes to settle (0.6 s) so a slider drag makes one write,
 skips rewriting an unchanged `config.json`, and asks before saving while audio streams.
+
+### Store previews
+
+The plugins repo CI runs every plugin for a few seconds with
+[`gitmatrix/tools/preview.py`](../../gitmatrix/tools/preview.py) and commits the result as
+`<plugin>/preview.gif`: a looping recording of the display drawn as LED dots. Its hash goes
+in `index.json` (`preview`), and Discover shows it, falling back to `thumbnail.png`.
+
+The recording runs the real runtime on the CPython host harness with a fake clock, the
+widget's ROM pixel fonts and no network. To make a plugin look its best, add
+`preview/preview.json`:
+
+```json
+{
+  "seconds": 6,
+  "skip": 0,
+  "seed": 1,
+  "settings": {"login": "octocat"},
+  "fetch": {"api.github.com/graphql": "graphql.json"}
+}
+```
+
+| Key | Meaning |
+| --- | --- |
+| `seconds` | Length of the loop, 1–15 (default 6). |
+| `skip` | Seconds to run before recording starts (default 0). |
+| `seed` | `random.seed()` value, so every build records the same GIF (default 1). |
+| `settings` | Settings to apply, secrets included (use fake tokens: the file is public). |
+| `fetch` | Maps `"host/path"` (no query string) or `"host"` to a file in `preview/` that `fetch.AsyncFetch` returns with HTTP 200. Any other request gets HTTP 404. |
+
+Rectangles, blits and pixel-font text render as on the device. The host stubs don't
+draw shapes, vector fonts or `oklch` colours, so plugins built on those preview poorly;
+keep a good `thumbnail.png` for them. To record one locally (needs Pillow):
+
+```sh
+python3 gitmatrix/tools/preview.py path/to/my_plugin    # writes my_plugin/preview.gif
+```
 
 ### Flash writes and Bluetooth audio
 

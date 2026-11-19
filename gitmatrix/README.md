@@ -181,6 +181,8 @@ alert then replaces the music for a moment and the music comes back on its own.
 **Discover** lists the plugins in `martinwoodward/gitmatrix-plugins` (set `PLUGIN_REPO` /
 `PLUGIN_BRANCH` in `/gitmatrix_config.py` to use another repo). The device fetches and
 caches its `index.json` every 15 minutes; search and filtering happen in the browser.
+Each card shows an animated preview recorded by the plugins repo CI with
+[`tools/preview.py`](tools/preview.py) (or the plugin's `thumbnail.png` if it has none).
 Installing downloads and verifies the package, then swaps it into `/lib/plugins/<name>/`
 in one burst. A power cut mid-install is repaired at boot, and a failed update puts the
 old version back. Each plugin's page (click it on Home) has its settings, its

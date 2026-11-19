@@ -286,6 +286,7 @@ def parse_index(data):
             "settings": bool(d.get("settings")),
             "config": bool(d.get("config")),
             "input": bool(d.get("input")),
+            "preview": _str(d.get("preview"), 40),  # preview.gif's hash, "" without one
         }
     return out
 

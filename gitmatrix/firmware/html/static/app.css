@@ -112,6 +112,7 @@ pre.log { max-height: 20rem; overflow: auto; background: var(--bg); padding: 0.7
 .cards .card { display: flex; flex-direction: column; gap: 0.4rem; margin: 0; }
 .cards .card .grow { flex: 1; }
 .thumb { width: 100%; aspect-ratio: 53 / 7; image-rendering: pixelated; background: #000; border-radius: 3px; }
+.thumb.preview { image-rendering: auto; }
 .thumb.missing { visibility: hidden; }
 .tags { display: flex; flex-wrap: wrap; gap: 0.25rem; }
 .tag, .badge { font-size: 0.75rem; padding: 0.05rem 0.45rem; border-radius: 1rem; background: var(--lift); color: var(--dim); }

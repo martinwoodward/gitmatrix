@@ -9,7 +9,7 @@ schema, persistent state and a store thumbnail. The host test harness loads it a
 my_plugin/
     __init__.py      # the plugin
     package.json     # manifest + settings schema
-    thumbnail.png    # 53x7 preview for Discover (required by the plugins repo CI)
+    thumbnail.png    # 53x7 still for Discover (required by the plugins repo CI)
 ```
 
 ## Make it yours
@@ -24,6 +24,10 @@ my_plugin/
    if the knob should keep stepping plugins. Don't add `hash` or `urls`; the plugins
    repo CI writes them.
 4. Replace `thumbnail.png` with a 53×7 PNG of your plugin.
+5. Check its store preview: `python3 ../../tools/preview.py my_plugin` records
+   `my_plugin/preview.gif` (needs Pillow). If your plugin needs settings or the network,
+   add `my_plugin/preview/preview.json` with canned settings and responses
+   ([Store previews](../../../docs/gitmatrix/plugin-api.md#store-previews)).
 
 ## Try it on a device
 
@@ -40,7 +44,8 @@ To iterate without the device, copy it into a test like
 
 Open a pull request adding the folder at the top level of
 [martinwoodward/gitmatrix-plugins](https://github.com/martinwoodward/gitmatrix-plugins).
-Its CI validates the manifest, schema and thumbnail and regenerates `index.json`.
+Its CI validates the manifest, schema and thumbnail, records `preview.gif` and
+regenerates `index.json`. Don't commit `preview.gif` yourself; CI writes it.
 
 ## More
 
